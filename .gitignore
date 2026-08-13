@@ -1,0 +1,5 @@
+*.o
+*.mod
+advect3d/advect3d
+
+.DS_Store
