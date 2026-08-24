@@ -1,6 +1,72 @@
+!-------------------------------------------------------------------------------
+!> module common
+!!
+!! @par Description
+!!      A common module for SCALE-DG kernel extraction.
+!!      
+!!
+!! @author Yuta Kawai, Team SCALE
+!<
 module mod_common
-  use, intrinsic :: iso_fortran_env, only: real64
+  !-----------------------------------------------------------------------------
+  !
+  !++ used modules
+  !  
+  use, intrinsic :: iso_fortran_env, only: &
+    int64, real64
   implicit none
-  integer, parameter :: RP = real64
-  real(RP), parameter :: PI = 4.0_RP*atan(1.0_RP)
+  private
+  !-----------------------------------------------------------------------------
+  !
+  !++ Public parameters & variables
+  !
+  integer, public, parameter :: RP = real64
+  integer, public, parameter :: IP = int64
+  real(RP), public, parameter :: PI = 4.0_RP*atan(1.0_RP)
+
+  ! 3-stage third-order SSP Runge-Kutta method
+  integer, public, parameter :: RK3s3oSSP_nstage = 3
+  real(RP), public, parameter :: RK3s3oSSP_rk_a(RK3s3oSSP_nstage) = [ 0.0_RP, 0.75_RP, 1.0_RP/3.0_RP ]
+  real(RP), public, parameter :: RK3s3oSSP_rk_b(RK3s3oSSP_nstage) = [ 1.0_RP, 0.25_RP, 2.0_RP/3.0_RP ]
+
+  ! Timer
+  type, public :: Timer
+    integer(IP) :: count_start = 0_int64
+    integer(IP) :: count_accum = 0_int64
+    integer(IP) :: count_rate  = 0_int64
+  end type Timer  
+  public :: Timer_start, Timer_stop, Timer_elapsed
+
+contains
+!OCL SERIAL
+  subroutine Timer_start(this)
+    implicit none
+    type(Timer), intent(inout) :: this
+    !------------------------------------------------------------------------------
+    call system_clock(this%count_start, this%count_rate)
+    return
+  end subroutine Timer_start
+!OCL SERIAL
+  subroutine Timer_stop(this)
+    implicit none
+    type(Timer), intent(inout) :: this
+    integer(IP) :: count_now
+    !------------------------------------------------------------------------------
+    call system_clock(count_now)
+    this%count_accum = this%count_accum &
+                    + (count_now - this%count_start)
+    return
+  end subroutine Timer_stop  
+!OCL SERIAL
+  function Timer_elapsed(this) result(time_sec)
+    implicit none
+    type(Timer), intent(in) :: this
+    real(RP)   :: time_sec
+
+    integer(IP) :: count_now
+    !------------------------------------------------------------------------------
+    time_sec = real(this%count_accum, RP) &
+            / real(this%count_rate, RP)    
+    return
+  end function Timer_elapsed
 end module mod_common
