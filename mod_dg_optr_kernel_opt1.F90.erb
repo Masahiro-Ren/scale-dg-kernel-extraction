@@ -44,7 +44,8 @@ contains
 % np_div3_res = np - np_div3*2
 !--- For p=<%=p%> ------------------------------------
 
-!> Calculate a matrix-vector multiplication associated with mathematical operations in the x direction (first dimension of vec_in) with p=<%=p%>
+!> Calculate a matrix-vector multiplication associated with mathematical
+!! operations in the x direction (first dimension of vec_in) with p=<%=p%>
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_dirX_P<%=p%>( Mat_x, vec_in, vec_out )
@@ -69,7 +70,8 @@ contains
     return
   end subroutine element_operation_kernel_matvec_dirX_P<%=p%>
 
-!> Calculate a matrix-vector multiplication associated with mathematical operations in the y direction (second dimension of vec_in) with p=<%=p%>
+!> Calculate a matrix-vector multiplication associated with mathematical
+!! operations in the y direction (second dimension of vec_in) with p=<%=p%>
 !! For a matrix-vector multiplication (vec_out = Mat_y vec_in), the passed variable of Mat_y should be transposed.
 !!
 !OCL SERIAL
@@ -97,7 +99,8 @@ contains
     return
   end subroutine element_operation_kernel_matvec_dirY_P<%=p%>
 
-!> Calculate a matrix-vector multiplication associated with mathematical operations in the z direction (third dimension of vec_in) with p=<%=p%>
+!> Calculate a matrix-vector multiplication associated with mathematical
+!! operations in the z direction (third dimension of vec_in) with p=<%=p%>
 !! For a matrix-vector multiplication (vec_out = Mat_z vec_in), the passed variable of Mat_z should be transposed.
 !!
 !OCL SERIAL
@@ -153,8 +156,10 @@ contains
     return
   end subroutine element_operation_kernel_matvec_Lift_hexahedral_P<%=p%>
   
-!> Calculate a matrix-vector multiplication associated with mathematical operations in the x, y, and z direction (third dimension of vec_in) with p=<%=p%>
-!! For a matrix-vector multiplication (vec_d_out = Mat_d vec_in where d=x,y,z), the passed variables of Mat_y and Mat_z should be transposed.
+!> Calculate a matrix-vector multiplication associated with mathematical
+!! operations in the x, y, and z directions with p=<%=p%>
+!! For a matrix-vector multiplication (vec_d_out = Mat_d vec_in where d=x,y,z),
+!! the passed variables of Mat_y and Mat_z should be transposed.
 !! Note that we assume that vec_in_ has same data as vec_in, but are reshaped via the call of this subroutine. 
 !!
 !OCL SERIAL
@@ -213,8 +218,10 @@ contains
     return
   end subroutine element_operation_kernel_matvec_gradlike_dirXYZ_P<%=p%>
 
-!> Calculate a matrix-vector multiplication associated with mathematical operations in the x, y, and z direction (third dimension of vec_in) with p=<%=p%>
-!! For a matrix-vector multiplication (vec_d_out = Mat_d vec_d_in where d=x,y,z), the passed variables of Mat_y and Mat_z should be transposed.
+!> Calculate a matrix-vector multiplication associated with mathematical
+!! operations in the x, y, and z directions with p=<%=p%>
+!! For a matrix-vector multiplication (vec_d_out = Mat_d vec_d_in where d=x,y,z),
+!! the passed variables of Mat_y and Mat_z should be transposed.
 !! Note that we assume that vec_in_ has same data as vec_in, but are reshaped via the call of this subroutine. 
 !!
 !OCL SERIAL
