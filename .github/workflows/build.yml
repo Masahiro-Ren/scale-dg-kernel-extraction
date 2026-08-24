@@ -18,8 +18,6 @@ jobs:
 
     - name: Install Fortran compiler
       run: |
-        sudo apt-get update
-
         echo "Update information of package list.."
         sudo apt-get update
 
@@ -28,7 +26,7 @@ jobs:
 
     - name: Build scale-dg-kernel-extraction
       run: |
-        echo "Build FE library .."
+        echo "Build .."
         export FC=gfortran
         export FFLAGS="-O3 -fopenmp"
         make
@@ -37,6 +35,6 @@ jobs:
       run: |
         echo "Run tests .."
         export OMP_NUM_THREADS=2
-        ./scale-dg-kernel-extraction input.conf
+        ./scale-dg-extraction input.conf
 
 
