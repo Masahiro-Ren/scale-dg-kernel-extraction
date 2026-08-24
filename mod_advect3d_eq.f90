@@ -1,14 +1,44 @@
-module mod_advect3d_kernel
-  use mod_common, only: RP
+!-------------------------------------------------------------------------------
+!> module mesh
+!!
+!! @par Description
+!!      A module to calculate the tendency 3D advection equation
+!!
+!! @author Yuta Kawai, Xuanzhengbo Ren, Team SCALE
+!<
+module mod_advect3d_eq
+  use mod_common, only: RP, &
+  Timer, Timer_start, Timer_stop, Timer_elapsed
   implicit none
   private
 
-  public :: advect3d_kernel_cal_tend
+  public :: setup_advect3d_eq_setup
+  public :: setup_advect3d_eq_finalize
+  public :: advect3d_eq_cal_tend
 
+  type(Timer) :: timer_ebnd_flux
+  type(Timer) :: timer_dqdt
 contains
-  !> Advection DG kernel
+  !> Setup
 !OCL SERIAL
-  subroutine advect3d_kernel_cal_tend( dqdt, & ! (out)
+  subroutine setup_advect3d_eq_setup()
+    implicit none
+    !------------------------------------------------------------------------------
+    return
+  end subroutine setup_advect3d_eq_setup
+  !> Finalize
+!OCL SERIAL
+  subroutine setup_advect3d_eq_finalize()
+    implicit none
+    !------------------------------------------------------------------------------
+    write(*,'(A30,ES24.5)') "Element boundary flux:", Timer_elapsed(timer_ebnd_flux)
+    write(*,'(A30,ES24.5)') "Volume derivate + surface lift:", Timer_elapsed(timer_dqdt)
+    return
+  end subroutine setup_advect3d_eq_finalize
+
+  !> Calculate the tendency of 3D advection equation
+!OCL SERIAL
+  subroutine advect3d_eq_cal_tend( dqdt, & ! (out)
     q, u, v, w,                              & ! (in)
     D1D, D1D_tr, Lift_mat,                   & ! (in)
     VMapM, VMapP, normal_fn, Escale, Fscale, & ! (in)
@@ -37,18 +67,22 @@ contains
 
     !------------------------------------------------------------
 
+    call Timer_start(timer_ebnd_flux)
     call cal_elembnd_flux( ebnd_flux,   & ! (out)
        q, u, v, w,                      & ! (in)
        VMapM, VMapP, normal_fn, Fscale, & ! (in)
        Np, NfpTot, Ne, NeA )
+    call Timer_stop(timer_ebnd_flux)
 
+    call Timer_start(timer_dqdt)
     call cal_dqdt( dqdt,               & ! (out)
        q, u, v, w,  ebnd_flux,         & ! (in)
        D1D, D1D_tr, Lift_mat,          & ! (in)
        Escale, Nq, Np, NfpTot, Ne, NeA ) ! (in)
+    call Timer_stop(timer_dqdt)
 
      return
-  end subroutine advect3d_kernel_cal_tend
+  end subroutine advect3d_eq_cal_tend
 
   !> Calculate the element boundary flux
 !OCL SERIAL
@@ -56,7 +90,7 @@ contains
     q_, u_, v_, w_,                  & ! (in)
     VMapM, VMapP, normal_fn, Fscale, & ! (in)
     Np, NfpTot, Ne, NeA              ) ! (in)
-
+    implicit none
     integer, intent(in) :: Np
     integer, intent(in) :: NfpTot
     integer, intent(in) :: Ne
@@ -107,7 +141,6 @@ contains
     return
   end subroutine cal_elembnd_flux
 
-
   !> Calculate the volume derivative and apply surface lifting
 !OCL SERIAL
   subroutine cal_dqdt( dqdt,       & ! (out)
@@ -115,6 +148,10 @@ contains
     D1D, D1D_tr, Lift_mat, Escale, & ! (in)
     Nq, Np, NfpTot, Ne, NeA        ) ! (in)
 
+    use mod_dg_optr_kernel, only: &
+      tensorprod_divlike_dirXYZ, &
+      tensorprod_Lift_hexahedral
+    implicit none
     integer, intent(in) :: Nq
     integer, intent(in) :: Np
     integer, intent(in) :: NfpTot
@@ -160,102 +197,6 @@ contains
          + Escale(:,ke,3)*DzFlux(:) &
          + LiftBndFlux(:) )
     end do
-
     return
   end subroutine cal_dqdt
-
-  !> Tensor-product differentiation
-!OCL SERIAL
-  subroutine tensorprod_divlike_dirXYZ( &
-    vec_out_x, vec_out_y, vec_out_z, &
-    Mat, Mat_tr,                     &
-    vec_in_x, vec_in_y, vec_in_z,    &
-    Nq )
-    implicit none
-    integer, intent(in) :: Nq
-    real(RP), intent(in) :: Mat(Nq,Nq)
-    real(RP), intent(in) :: Mat_tr(Nq,Nq)
-    real(RP), intent(in) :: vec_in_x(Nq,Nq**2)
-    real(RP), intent(in) :: vec_in_y(Nq,Nq,Nq)
-    real(RP), intent(in) :: vec_in_z(Nq,Nq,Nq)
-    real(RP), intent(out) :: vec_out_x(Nq,Nq**2)
-    real(RP), intent(out) :: vec_out_y(Nq,Nq**2)
-    real(RP), intent(out) :: vec_out_z(Nq,Nq**2)
-
-    integer :: i,j,k,l,jk
-    !----------------------------------------------------------
-
-    vec_out_x(:,:) = 0.0_RP
-    vec_out_y(:,:) = 0.0_RP
-    vec_out_z(:,:) = 0.0_RP
-
-    !- x-direction
-    do jk = 1, Nq**2
-      do i = 1, Nq
-        do l = 1, Nq
-          vec_out_x(i,jk) = &
-               vec_out_x(i,jk) &
-             + Mat(i,l)*vec_in_x(l,jk)
-        end do
-      end do
-    end do
-
-    !- y-direction
-    do k = 1, Nq
-      do j = 1, Nq
-        jk = j + (k-1)*Nq
-        do i = 1, Nq
-          do l = 1, Nq
-            vec_out_y(i,jk) = vec_out_y(i,jk) &
-               + vec_in_y(i,l,k)*Mat_tr(l,j)
-          end do
-        end do
-      end do
-    end do
-
-    !- z-direction
-    do k = 1, Nq
-      do j = 1, Nq
-        jk = j + (k-1)*Nq
-        do i = 1, Nq
-          do l = 1, Nq
-            vec_out_z(i,jk) = vec_out_z(i,jk) &
-               + vec_in_z(i,j,l)*Mat_tr(l,k)
-
-          end do
-        end do
-      end do
-    end do
-    return
-  end subroutine tensorprod_divlike_dirXYZ
-
-  !> Tensor-product lifting for a hexahedral element
-!OCL SERIAL
-  subroutine tensorprod_Lift_hexahedral( &
-    vec_out,         &
-    Lift, vec_in, Nq )
-    implicit none
-    integer, intent(in) :: Nq
-    real(RP), intent(out) :: vec_out(Nq,Nq,Nq)
-    real(RP), intent(in) :: Lift(Nq,Nq,Nq,6)
-    real(RP), intent(in) :: vec_in(Nq,Nq,6)
-
-    integer :: i,j,k
-    !----------------------------------------------------------
-
-    do k = 1, Nq
-    do j = 1, Nq
-    do i = 1, Nq
-      vec_out(i,j,k) = &
-            Lift(i,j,k,1)*vec_in(i,k,1) &
-          + Lift(i,j,k,2)*vec_in(j,k,2) &
-          + Lift(i,j,k,3)*vec_in(i,k,3) &
-          + Lift(i,j,k,4)*vec_in(j,k,4) &
-          + Lift(i,j,k,5)*vec_in(i,j,5) &
-          + Lift(i,j,k,6)*vec_in(i,j,6)
-    end do
-    end do
-    end do
-    return
-  end subroutine tensorprod_Lift_hexahedral
-end module mod_advect3d_kernel
+end module mod_advect3d_eq
