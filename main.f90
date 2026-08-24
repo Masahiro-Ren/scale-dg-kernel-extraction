@@ -1,13 +1,31 @@
+!> Main program for SCALE-DG kernel extraction
+!!
+!! @author Yuta Kawai, Team SCALE
+!!
 program main
-  use mod_common, only: RP, PI
+  !-----------------------------------------------------------------------------
+  !
+  !++ used modules
+  !  
+  use mod_common, only: &
+    RP,                                     &
+    Timer,                                  &
+    Timer_start, Timer_stop, Timer_elapsed, &
+    RK_nstage => RK3s3oSSP_nstage,          &
+    rk_a => RK3s3oSSP_rk_a,                 &
+    rk_b => RK3s3oSSP_rk_b
   use mod_mesh, only: &
     PolyOrder, Nq, Np, NfpTot, Ne, NeA,  &
     D1D, D1D_tr, Lift_mat, VMapM, VMapP, &
     normal_fn, Escale, Fscale, pos_en, update_halo
-  use mod_advect3d_kernel, only: &
-    advect3d_kernel_cal_tend
-  
+  use mod_advect3d_eq, only: &
+    advect3d_eq_cal_tend
   implicit none
+
+  !-----------------------------------------------------------------------------
+  !
+  !++ Public parameters & variables
+  !
 
   integer :: nstep, output_interval
   integer :: istep, stage
@@ -20,20 +38,16 @@ program main
   real(RP), allocatable :: v(:,:)
   real(RP), allocatable :: w(:,:)
 
-  ! 3-stage third-order SSP Runge-Kutta method
-  integer, parameter :: RK_nstage = 3
-  real(RP), parameter :: rk_a(RK_nstage) = [ 0.0_RP, 0.75_RP, 1.0_RP/3.0_RP ]
-  real(RP), parameter :: rk_b(RK_nstage) = [ 1.0_RP, 0.25_RP, 2.0_RP/3.0_RP ]
-
   integer :: kelem
-  !------------------------------------------------------------
+
+  type(Timer) :: timer_main
+  type(Timer) :: timer_cal_tend
+
+  !- Main program ----------------------------------------------------------
 
   call init()
 
-  !============================================================
-  ! SSPRK(3,3)
-  !============================================================
-
+  !- Loop for time integration
   do istep = 1, nstep
 
     !$omp parallel do
@@ -44,16 +58,18 @@ program main
     do stage = 1, RK_nstage
       call update_halo(q)
 
-      call advect3d_kernel_cal_tend( dqdt,       & ! (out)
+      call Timer_start(timer_cal_tend)
+      call advect3d_eq_cal_tend( dqdt,       & ! (out)
         q, u, v, w,                              & ! (in)
         D1D, D1D_tr, Lift_mat,                   & ! (in)
         VMapM, VMapP, normal_fn, Escale, Fscale, & ! (in)
         Nq, Np, NfpTot, Ne, NeA )
+      call Timer_stop(timer_cal_tend)
 
       !$omp parallel do
       do kelem=1, Ne
         q(:,kelem) = rk_a(stage) * q0(:,kelem) &
-                   + rk_b(stage) * (q(:,kelem) + dt * dqdt(:,kelem))
+                   + rk_b(stage) * ( q(:,kelem) + dt * dqdt(:,kelem) )
       end do
     end do
 
@@ -63,9 +79,14 @@ program main
     end if
   end do
 
+  call final()
 contains
+  !> Initialize modules with DG mesh and DG operator kernel
   subroutine init()
-    use mod_mesh, only: mesh_init
+    use mod_common, only: PI
+    use mod_mesh, only: mesh_setup
+    use mod_advect3d_eq, only: setup_advect3d_eq_setup
+    use mod_dg_optr_kernel, only: dg_optr_kernel_setup    
     implicit none
 
     character(len=256) :: conf_file
@@ -76,11 +97,13 @@ contains
     real(RP) :: vel_x = 1.0_RP
     real(RP) :: vel_y = 1.0_RP
     real(RP) :: vel_z = 1.0_RP
+    character(len=8) :: DGOptrKernel_OptType = "OPT1" ! GENERAL or OPT1
 
     namelist /PARAM_ADVECT3D/ &
       NeX, NeY, NeZ, PolyOrder,   &
       dt, nstep, output_interval, &
-      vel_x, vel_y, vel_z
+      vel_x, vel_y, vel_z,        &
+      DGOptrKernel_OptType
 
     integer :: fid
     integer :: ke, p
@@ -97,20 +120,27 @@ contains
     read(fid,nml=PARAM_ADVECT3D)
     close(fid)
 
-    !-
-    call mesh_init( NeX, NeY, NeZ, PolyOrder, &
+    !- Initialize a mesh module
+    call mesh_setup( NeX, NeY, NeZ, PolyOrder, &
       1.0_RP, 1.0_RP, 1.0_RP )
 
-    allocate( q(Np,NeA), q0(Np,NeA), dqdt(Np,NeA))
-    allocate( u(Np,NeA), v(Np,NeA), w(Np,NeA))
+    allocate( q(Np,NeA), q0(Np,NeA), dqdt(Np,NeA) )
+    allocate( u(Np,NeA), v(Np,NeA), w(Np,NeA) )
 
-    !- Initial condition
+    !- Initialize a DG operator module
+    call dg_optr_kernel_setup( DGOptrKernel_OptType )
 
+    !- Initialize a advection equation module
+    call setup_advect3d_eq_setup()
+
+    !- Set initial condition
+
+    !$omp parallel do
     do ke = 1, Ne
     do p = 1, Np
-      q(p,ke) = sin(2.0_RP*PI*pos_en(p,ke,1)) &
-              * sin(2.0_RP*PI*pos_en(p,ke,2)) &
-              * sin(2.0_RP*PI*pos_en(p,ke,3))
+      q(p,ke) = sin( 2.0_RP*PI*pos_en(p,ke,1) ) &
+              * sin( 2.0_RP*PI*pos_en(p,ke,2) ) &
+              * sin( 2.0_RP*PI*pos_en(p,ke,3) )
 
       u(p,ke) = vel_x
       v(p,ke) = vel_y
@@ -122,7 +152,23 @@ contains
     call update_halo(u)
     call update_halo(v)
     call update_halo(w)
+
+    call Timer_start(timer_main)
     return
   end subroutine init
 
+!OCL SERIAL
+  subroutine final()
+    use mod_advect3d_eq, only: setup_advect3d_eq_finalize
+    implicit none
+    !-----------------------------------------------------------------------------
+
+    call Timer_stop(timer_main)
+    write(*,'(A)') "= Report of execution time [sec]"
+    write(*,'(A30,ES24.5)') "Main:", Timer_elapsed(timer_main)
+    write(*,'(A30,ES24.5)') "Cal_tend:", Timer_elapsed(timer_cal_tend)
+
+    call setup_advect3d_eq_finalize()
+    return
+  end subroutine final
 end program main
