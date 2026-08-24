@@ -83,6 +83,7 @@ program main
 contains
   !> Initialize modules with DG mesh and DG operator kernel
   subroutine init()
+    use, intrinsic :: iso_fortran_env, only: error_unit
     use mod_common, only: PI
     use mod_mesh, only: mesh_setup
     use mod_advect3d_eq, only: setup_advect3d_eq_setup
@@ -112,6 +113,13 @@ contains
     dt    = 1.0e-3_RP
     nstep = 100
     output_interval = 10
+
+    if (command_argument_count() < 1) then
+      write(error_unit,'(A)') 'Error: configuration file argument is required.'
+      write(error_unit,'(A)') 'Usage: scale-dg_extraction input.conf'
+      flush(error_unit)
+      error stop 1
+    end if
 
     call get_command_argument(1,conf_file)
 

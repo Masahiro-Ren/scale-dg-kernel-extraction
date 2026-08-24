@@ -1,5 +1,6 @@
 *.o
 *.mod
 advect3d/advect3d
+/scale-dg_extraction
 
 .DS_Store

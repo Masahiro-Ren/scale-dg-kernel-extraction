@@ -1,5 +1,7 @@
-FC     = gfortran
-FFLAGS = -O3 -fopenmp
+ifeq ($(origin FC), default)
+FC      = gfortran
+endif
+FFLAGS ?= -O3 -fopenmp
 
 TARGET = scale-dg_extraction
 OBJS   = mod_common.o         \
@@ -22,7 +24,7 @@ $(TARGET): $(OBJS)
 .SUFFIXES:
 .SUFFIXES: .o .f90 .c .erb .mod
 
-mod_dg_optr_kernel_opt1.f90: mod_dg_optr_kernel_opt1.f90.erb
+mod_dg_optr_kernel_opt1.f90: mod_dg_optr_kernel_opt1.F90.erb
 
 
 %.o: %.f90
