@@ -1,11 +1,33 @@
+!-------------------------------------------------------------------------------
+!> module mesh
+!!
+!! @par Description
+!!      A module to manage DG element and mesh
+!!
+!! @author Yuta Kawai, Team SCALE
+!<
 module mod_mesh
+  !-----------------------------------------------------------------------------
+  !
+  !++ Used modules
+  !
   use mod_common, only: RP
   implicit none
   private
 
-  public :: mesh_init
+  !-----------------------------------------------------------------------------
+  !
+  !++ Public procedure
+  !
+
+  public :: mesh_setup
   public :: update_halo
   
+  !-----------------------------------------------------------------------------
+  !
+  !++ Public parameters & variables
+  !
+
   !- DG element
 
   integer, public :: PolyOrder  !< Polynomial order
@@ -31,13 +53,25 @@ module mod_mesh
   real(RP), public, allocatable :: Fscale(:,:)      !< Face scaling factors
   real(RP), public, allocatable :: pos_en(:,:,:)    !< Element node coordinates
 
+
+  !-----------------------------------------------------------------------------
+  !
+  !++ Private procedure
+  !
+  !-----------------------------------------------------------------------------
+  !
+  !++ Private parameters & variables
+  !
+
   integer :: Nhalo                         !< Halo-buffer size in element units
   integer :: NhaloNode                     !< Number of face nodes stored in halo buffer
   integer, allocatable :: halo_src_map(:)  !< Source DOF index for each halo-buffer node
 
+  character(len=*), parameter :: operator_data_dir = "operator_data"
+  
 contains
 !OCL SERIAL
-  subroutine mesh_init( NeX, NeY, NeZ, p, &
+  subroutine mesh_setup( NeX, NeY, NeZ, p, &
     domsize_x, domsize_y, domsize_z )
     implicit none
     integer, intent(in) :: NeX, NeY, NeZ                    !< Number of elements in x, y, z directions
@@ -83,13 +117,10 @@ contains
     ! Geometry and VMapM / VMapP
     !
     ! Interior face:
-    !
     !   VMapP -> DOF of neighboring owned element
     !
     ! Boundary face:
-    !
     !   VMapP -> packed halo buffer
-    !
     !     Np*Ne + 1
     !     Np*Ne + 2
     !     ...
@@ -159,7 +190,7 @@ contains
     end do
 
     return
-  end subroutine mesh_init
+  end subroutine mesh_setup
 
 
   !> Update the halo values of a field variable
@@ -219,7 +250,7 @@ contains
     ! Operator data
     !----------------------------------------------------------
 
-    write(fname,'("operator/p",I0,".dat")') p
+    write(fname,'(a,"/p",I0,".dat")') operator_data_dir, p
 
     fid = 20
     open(fid,file=trim(fname),status='old',action='read')
@@ -311,7 +342,6 @@ contains
     do j = 1, Nq
     do i = 1, Nq
       n = i + (j-1)*Nq + (k-1)*Nq**2
-
       pos_en(n,ke,1) = xc + 0.5_RP*dx*x1D(i)
       pos_en(n,ke,2) = yc + 0.5_RP*dy*x1D(j)
       pos_en(n,ke,3) = zc + 0.5_RP*dz*x1D(k)
@@ -321,7 +351,6 @@ contains
 
     return
   end subroutine set_element_position
-
 
   !> Setup face geometry
   subroutine set_face_geometry(ke, dx, dy, dz)
@@ -366,7 +395,6 @@ contains
 
     return
   end subroutine set_face_geometry
-
 
   !> Get neighboring element information
   !
@@ -453,7 +481,6 @@ contains
 
     return
   end subroutine eval_neighbor_element
-
 
 !OCL SERIAL
   integer function elem_id(i, j, k, NeX, NeY)
