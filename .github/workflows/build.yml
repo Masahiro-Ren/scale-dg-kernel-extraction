@@ -14,7 +14,7 @@ jobs:
     steps:
     
     - name: Checkout scale-dg-kernel-extraction repository
-      uses: actions/checkout@v1
+      uses: actions/checkout@v4
 
     - name: Install Fortran compiler
       run: |
@@ -35,6 +35,6 @@ jobs:
       run: |
         echo "Run tests .."
         export OMP_NUM_THREADS=2
-        ./scale-dg-extraction input.conf
+        ./scale-dg_extraction input.conf
 
 
