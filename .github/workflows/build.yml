@@ -1,0 +1,42 @@
+name: build
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  #push:
+  #  branches: 
+  #  - feature/ci_* 
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+    
+    - name: Checkout scale-dg-kernel-extraction repository
+      uses: actions/checkout@v1
+
+    - name: Install Fortran compiler
+      run: |
+        sudo apt-get update
+
+        echo "Update information of package list.."
+        sudo apt-get update
+
+        echo "Install Fortran compiler .."
+        sudo apt-get install -y gfortran
+
+    - name: Build scale-dg-kernel-extraction
+      run: |
+        echo "Build FE library .."
+        export FC=gfortran
+        export FFLAGS="-O3 -fopenmp"
+        make
+
+    - name: Run tests
+      run: |
+        echo "Run tests .."
+        export OMP_NUM_THREADS=2
+        ./scale-dg-kernel-extraction input.conf
+
+
