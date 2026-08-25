@@ -132,6 +132,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P<%=p%>( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(<%=np%>,<%=np%>,<%=np%>,6)
     real(RP), intent(in) :: vec_in(<%=np%>,<%=np%>,6)
@@ -140,6 +141,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, <%=np%>
     do j=1, <%=np%>
     do i=1, <%=np%>
@@ -228,6 +230,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P<%=p%>( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(<%=np%>,<%=np%>)
     real(RP), intent(in) :: Mat_tr(<%=np%>,<%=np%>)
@@ -246,6 +249,11 @@ contains
 
     ! X-dir
 
+% if p <= 7
+!$acc loop vector collapse(2)
+% else
+!$acc loop vector collapse(2) private(tmp1,tmp2,tmp3)
+% end
     do jk=1, <%=np%>**2
     do i=1, <%=np%>
 % if p <= 7
@@ -276,6 +284,11 @@ contains
     end do
 
     ! Y-dir
+% if p <= 7
+!$acc loop vector collapse(2) private(jk)
+% else
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
+% end
     do k=1, <%=np%>
     do j=1, <%=np%>
       jk = j + (k-1)*<%=np%>
@@ -309,6 +322,11 @@ contains
     end do
     
     ! Z-dir
+% if p <= 7
+!$acc loop vector collapse(2) private(jk)
+% else
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
+% end
     do k=1, <%=np%>
     do j=1, <%=np%>
       jk = j + (k-1)*<%=np%>

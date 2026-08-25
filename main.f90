@@ -39,6 +39,7 @@ program main
   real(RP), allocatable :: w(:,:)
 
   integer :: kelem
+  integer :: pn
 
   type(Timer) :: timer_main
   type(Timer) :: timer_cal_tend
@@ -51,8 +52,11 @@ program main
   do istep = 1, nstep
 
     !$omp parallel do
-    do kelem=1, Ne 
-      q0(:,kelem) = q(:,kelem)
+    !$acc parallel loop collapse(2) default(present)
+    do kelem=1, Ne
+      do pn=1, Np
+        q0(pn,kelem) = q(pn,kelem)
+      end do
     end do
 
     do stage = 1, RK_nstage
@@ -67,13 +71,17 @@ program main
       call Timer_stop(timer_cal_tend)
 
       !$omp parallel do
+      !$acc parallel loop collapse(2) default(present)
       do kelem=1, Ne
-        q(:,kelem) = rk_a(stage) * q0(:,kelem) &
-                   + rk_b(stage) * ( q(:,kelem) + dt * dqdt(:,kelem) )
+        do pn=1, Np
+          q(pn,kelem) = rk_a(stage) * q0(pn,kelem) &
+                      + rk_b(stage) * ( q(pn,kelem) + dt * dqdt(pn,kelem) )
+        end do
       end do
     end do
 
     if (mod(istep,output_interval) == 0) then
+      !$acc update host(q)
       write(*,'(I8,2ES24.15)') &
            istep, minval(q(:,1:Ne)), maxval(q(:,1:Ne))
     end if
@@ -155,6 +163,9 @@ contains
       w(p,ke) = vel_z
     end do
     end do
+
+    ! Move the field arrays to the device; halo exchange runs there.
+    !$acc enter data copyin(q, u, v, w) create(q0, dqdt)
 
     call update_halo(q)
     call update_halo(u)

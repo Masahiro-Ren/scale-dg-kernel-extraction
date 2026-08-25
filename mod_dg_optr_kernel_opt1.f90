@@ -201,6 +201,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P1( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(2,2,2,6)
     real(RP), intent(in) :: vec_in(2,2,6)
@@ -209,6 +210,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 2
     do j=1, 2
     do i=1, 2
@@ -288,6 +290,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P1( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(2,2)
     real(RP), intent(in) :: Mat_tr(2,2)
@@ -303,6 +306,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2)
     do jk=1, 2**2
     do i=1, 2
       vec_out_x(i,jk) = Mat(i,1) * vec_in_x(1,jk) &
@@ -311,6 +315,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 2
     do j=1, 2
       jk = j + (k-1)*2
@@ -322,6 +327,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 2
     do j=1, 2
       jk = j + (k-1)*2
@@ -470,6 +476,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P2( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(3,3,3,6)
     real(RP), intent(in) :: vec_in(3,3,6)
@@ -478,6 +485,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 3
     do j=1, 3
     do i=1, 3
@@ -560,6 +568,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P2( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(3,3)
     real(RP), intent(in) :: Mat_tr(3,3)
@@ -575,6 +584,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2)
     do jk=1, 3**2
     do i=1, 3
       vec_out_x(i,jk) = Mat(i,1) * vec_in_x(1,jk) &
@@ -584,6 +594,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 3
     do j=1, 3
       jk = j + (k-1)*3
@@ -596,6 +607,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 3
     do j=1, 3
       jk = j + (k-1)*3
@@ -751,6 +763,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P3( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(4,4,4,6)
     real(RP), intent(in) :: vec_in(4,4,6)
@@ -759,6 +772,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 4
     do j=1, 4
     do i=1, 4
@@ -844,6 +858,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P3( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(4,4)
     real(RP), intent(in) :: Mat_tr(4,4)
@@ -859,6 +874,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2)
     do jk=1, 4**2
     do i=1, 4
       vec_out_x(i,jk) = Mat(i,1) * vec_in_x(1,jk) &
@@ -869,6 +885,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 4
     do j=1, 4
       jk = j + (k-1)*4
@@ -882,6 +899,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 4
     do j=1, 4
       jk = j + (k-1)*4
@@ -1044,6 +1062,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P4( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(5,5,5,6)
     real(RP), intent(in) :: vec_in(5,5,6)
@@ -1052,6 +1071,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 5
     do j=1, 5
     do i=1, 5
@@ -1140,6 +1160,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P4( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(5,5)
     real(RP), intent(in) :: Mat_tr(5,5)
@@ -1155,6 +1176,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2)
     do jk=1, 5**2
     do i=1, 5
       vec_out_x(i,jk) = Mat(i,1) * vec_in_x(1,jk) &
@@ -1166,6 +1188,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 5
     do j=1, 5
       jk = j + (k-1)*5
@@ -1180,6 +1203,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 5
     do j=1, 5
       jk = j + (k-1)*5
@@ -1349,6 +1373,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P5( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(6,6,6,6)
     real(RP), intent(in) :: vec_in(6,6,6)
@@ -1357,6 +1382,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 6
     do j=1, 6
     do i=1, 6
@@ -1448,6 +1474,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P5( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(6,6)
     real(RP), intent(in) :: Mat_tr(6,6)
@@ -1463,6 +1490,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2)
     do jk=1, 6**2
     do i=1, 6
       vec_out_x(i,jk) = Mat(i,1) * vec_in_x(1,jk) &
@@ -1475,6 +1503,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 6
     do j=1, 6
       jk = j + (k-1)*6
@@ -1490,6 +1519,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 6
     do j=1, 6
       jk = j + (k-1)*6
@@ -1666,6 +1696,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P6( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(7,7,7,6)
     real(RP), intent(in) :: vec_in(7,7,6)
@@ -1674,6 +1705,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 7
     do j=1, 7
     do i=1, 7
@@ -1768,6 +1800,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P6( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(7,7)
     real(RP), intent(in) :: Mat_tr(7,7)
@@ -1783,6 +1816,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2)
     do jk=1, 7**2
     do i=1, 7
       vec_out_x(i,jk) = Mat(i,1) * vec_in_x(1,jk) &
@@ -1796,6 +1830,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 7
     do j=1, 7
       jk = j + (k-1)*7
@@ -1812,6 +1847,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 7
     do j=1, 7
       jk = j + (k-1)*7
@@ -1995,6 +2031,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P7( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(8,8,8,6)
     real(RP), intent(in) :: vec_in(8,8,6)
@@ -2003,6 +2040,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 8
     do j=1, 8
     do i=1, 8
@@ -2100,6 +2138,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P7( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(8,8)
     real(RP), intent(in) :: Mat_tr(8,8)
@@ -2115,6 +2154,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2)
     do jk=1, 8**2
     do i=1, 8
       vec_out_x(i,jk) = Mat(i,1) * vec_in_x(1,jk) &
@@ -2129,6 +2169,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 8
     do j=1, 8
       jk = j + (k-1)*8
@@ -2146,6 +2187,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk)
     do k=1, 8
     do j=1, 8
       jk = j + (k-1)*8
@@ -2336,6 +2378,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P8( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(9,9,9,6)
     real(RP), intent(in) :: vec_in(9,9,6)
@@ -2344,6 +2387,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 9
     do j=1, 9
     do i=1, 9
@@ -2444,6 +2488,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P8( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(9,9)
     real(RP), intent(in) :: Mat_tr(9,9)
@@ -2460,6 +2505,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2) private(tmp1,tmp2,tmp3)
     do jk=1, 9**2
     do i=1, 9
       tmp1 = Mat(i,1) * vec_in_x(1,jk) &
@@ -2476,6 +2522,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 9
     do j=1, 9
       jk = j + (k-1)*9
@@ -2495,6 +2542,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 9
     do j=1, 9
       jk = j + (k-1)*9
@@ -2697,6 +2745,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P9( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(10,10,10,6)
     real(RP), intent(in) :: vec_in(10,10,6)
@@ -2705,6 +2754,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 10
     do j=1, 10
     do i=1, 10
@@ -2808,6 +2858,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P9( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(10,10)
     real(RP), intent(in) :: Mat_tr(10,10)
@@ -2824,6 +2875,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2) private(tmp1,tmp2,tmp3)
     do jk=1, 10**2
     do i=1, 10
       tmp1 = Mat(i,1) * vec_in_x(1,jk) &
@@ -2841,6 +2893,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 10
     do j=1, 10
       jk = j + (k-1)*10
@@ -2861,6 +2914,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 10
     do j=1, 10
       jk = j + (k-1)*10
@@ -3070,6 +3124,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P10( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(11,11,11,6)
     real(RP), intent(in) :: vec_in(11,11,6)
@@ -3078,6 +3133,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 11
     do j=1, 11
     do i=1, 11
@@ -3184,6 +3240,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P10( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(11,11)
     real(RP), intent(in) :: Mat_tr(11,11)
@@ -3200,6 +3257,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2) private(tmp1,tmp2,tmp3)
     do jk=1, 11**2
     do i=1, 11
       tmp1 = Mat(i,1) * vec_in_x(1,jk) &
@@ -3218,6 +3276,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 11
     do j=1, 11
       jk = j + (k-1)*11
@@ -3239,6 +3298,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 11
     do j=1, 11
       jk = j + (k-1)*11
@@ -3455,6 +3515,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P11( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(12,12,12,6)
     real(RP), intent(in) :: vec_in(12,12,6)
@@ -3463,6 +3524,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 12
     do j=1, 12
     do i=1, 12
@@ -3572,6 +3634,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P11( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(12,12)
     real(RP), intent(in) :: Mat_tr(12,12)
@@ -3588,6 +3651,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2) private(tmp1,tmp2,tmp3)
     do jk=1, 12**2
     do i=1, 12
       tmp1 = Mat(i,1) * vec_in_x(1,jk) &
@@ -3607,6 +3671,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 12
     do j=1, 12
       jk = j + (k-1)*12
@@ -3629,6 +3694,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 12
     do j=1, 12
       jk = j + (k-1)*12
@@ -3852,6 +3918,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P12( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(13,13,13,6)
     real(RP), intent(in) :: vec_in(13,13,6)
@@ -3860,6 +3927,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 13
     do j=1, 13
     do i=1, 13
@@ -3972,6 +4040,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P12( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(13,13)
     real(RP), intent(in) :: Mat_tr(13,13)
@@ -3988,6 +4057,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2) private(tmp1,tmp2,tmp3)
     do jk=1, 13**2
     do i=1, 13
       tmp1 = Mat(i,1) * vec_in_x(1,jk) &
@@ -4008,6 +4078,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 13
     do j=1, 13
       jk = j + (k-1)*13
@@ -4031,6 +4102,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 13
     do j=1, 13
       jk = j + (k-1)*13
@@ -4261,6 +4333,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P13( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(14,14,14,6)
     real(RP), intent(in) :: vec_in(14,14,6)
@@ -4269,6 +4342,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 14
     do j=1, 14
     do i=1, 14
@@ -4384,6 +4458,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P13( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(14,14)
     real(RP), intent(in) :: Mat_tr(14,14)
@@ -4400,6 +4475,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2) private(tmp1,tmp2,tmp3)
     do jk=1, 14**2
     do i=1, 14
       tmp1 = Mat(i,1) * vec_in_x(1,jk) &
@@ -4421,6 +4497,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 14
     do j=1, 14
       jk = j + (k-1)*14
@@ -4445,6 +4522,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 14
     do j=1, 14
       jk = j + (k-1)*14
@@ -4682,6 +4760,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P14( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(15,15,15,6)
     real(RP), intent(in) :: vec_in(15,15,6)
@@ -4690,6 +4769,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 15
     do j=1, 15
     do i=1, 15
@@ -4808,6 +4888,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P14( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(15,15)
     real(RP), intent(in) :: Mat_tr(15,15)
@@ -4824,6 +4905,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2) private(tmp1,tmp2,tmp3)
     do jk=1, 15**2
     do i=1, 15
       tmp1 = Mat(i,1) * vec_in_x(1,jk) &
@@ -4846,6 +4928,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 15
     do j=1, 15
       jk = j + (k-1)*15
@@ -4871,6 +4954,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 15
     do j=1, 15
       jk = j + (k-1)*15
@@ -5115,6 +5199,7 @@ contains
 !!
 !OCL SERIAL
   subroutine element_operation_kernel_matvec_Lift_hexahedral_P15( Lift, vec_in, vec_out )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Lift(16,16,16,6)
     real(RP), intent(in) :: vec_in(16,16,6)
@@ -5123,6 +5208,7 @@ contains
     integer :: i, j, k
     !----------------------------------------------------------
 
+!$acc loop vector collapse(3)
     do k=1, 16
     do j=1, 16
     do i=1, 16
@@ -5244,6 +5330,7 @@ contains
   subroutine element_operation_kernel_matvec_divlike_dirXYZ_P15( &
     Mat, Mat_tr, vec_in_x, vec_in_y, vec_in_z, &
     vec_out_x, vec_out_y, vec_out_z  )
+!$acc routine vector
     implicit none
     real(RP), intent(in) :: Mat(16,16)
     real(RP), intent(in) :: Mat_tr(16,16)
@@ -5260,6 +5347,7 @@ contains
 
     ! X-dir
 
+!$acc loop vector collapse(2) private(tmp1,tmp2,tmp3)
     do jk=1, 16**2
     do i=1, 16
       tmp1 = Mat(i,1) * vec_in_x(1,jk) &
@@ -5283,6 +5371,7 @@ contains
     end do
 
     ! Y-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 16
     do j=1, 16
       jk = j + (k-1)*16
@@ -5309,6 +5398,7 @@ contains
     end do
     
     ! Z-dir
+!$acc loop vector collapse(2) private(jk,tmp1,tmp2,tmp3)
     do k=1, 16
     do j=1, 16
       jk = j + (k-1)*16

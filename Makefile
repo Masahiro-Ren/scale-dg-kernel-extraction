@@ -3,6 +3,9 @@ FC      = gfortran
 endif
 FFLAGS ?= -O3 -fopenmp
 
+# GPU build (GH200, NVIDIA HPC SDK):
+#   make FC=nvfortran FFLAGS="-O3 -acc=gpu -gpu=cc90 -Minfo=accel"
+
 TARGET = scale-dg_extraction
 OBJS   = mod_common.o         \
          mod_mesh.o                \

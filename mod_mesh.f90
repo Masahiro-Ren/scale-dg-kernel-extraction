@@ -189,6 +189,12 @@ contains
     end do
     end do
 
+    ! Copy the time-invariant DG operators and mesh metadata to the device.
+    ! (pos_en is only used on the host for the initial condition.)
+    !$acc enter data copyin( D1D, D1D_tr, Lift_mat,          &
+    !$acc                    VMapM, VMapP, normal_fn,        &
+    !$acc                    Escale, Fscale, halo_src_map )
+
     return
   end subroutine mesh_setup
 
@@ -213,6 +219,7 @@ contains
     integer :: ibuf
     !------------------------------------------------------------
 
+    !$acc parallel loop default(present)
     do ibuf = 1, NhaloNode
       f(Np*Ne+ibuf) = f(halo_src_map(ibuf))
     end do
