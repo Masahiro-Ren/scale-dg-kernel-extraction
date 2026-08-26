@@ -19,12 +19,17 @@ module mod_advect3d_eq
   type(Timer) :: timer_ebnd_flux
   type(Timer) :: timer_dqdt
   type(Timer) :: timer_fused
+  type(Timer) :: timer_cuf
 
   !> Tendency kernel type: separate flux / volume+lift kernels (original)
   integer, parameter :: TEND_KERNEL_TYPEID_SPLIT = 1
   !> Tendency kernel type: single element loop computing the boundary flux
   !! and the volume derivative + surface lift per element
   integer, parameter :: TEND_KERNEL_TYPEID_FUSED = 2
+  !> Tendency kernel type: fused CUDA Fortran kernel (p=7 only, needs -cuda)
+  integer, parameter :: TEND_KERNEL_TYPEID_CUF = 3
+  !> Same as CUF with the tensor contractions on FP64 tensor cores
+  integer, parameter :: TEND_KERNEL_TYPEID_CUF_TC = 4
 
   integer :: tend_kernel_typeid = TEND_KERNEL_TYPEID_SPLIT
 
@@ -44,6 +49,10 @@ contains
       tend_kernel_typeid = TEND_KERNEL_TYPEID_SPLIT
     case ("FUSED")
       tend_kernel_typeid = TEND_KERNEL_TYPEID_FUSED
+    case ("CUF")
+      tend_kernel_typeid = TEND_KERNEL_TYPEID_CUF
+    case ("CUF_TC")
+      tend_kernel_typeid = TEND_KERNEL_TYPEID_CUF_TC
     case default
       write(*,*) "Unsupported tend_kernel_type: ", tend_kernel_type
     end select
@@ -54,7 +63,10 @@ contains
   subroutine setup_advect3d_eq_finalize()
     implicit none
     !------------------------------------------------------------------------------
-    if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_FUSED ) then
+    if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_CUF .or. &
+         tend_kernel_typeid == TEND_KERNEL_TYPEID_CUF_TC ) then
+      write(*,'(A30,ES24.5)') "CUF fused tendency:", Timer_elapsed(timer_cuf)
+    else if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_FUSED ) then
       ! Both phases run in one kernel; only the combined time is
       ! measurable from the host.
       write(*,'(A30,ES24.5)') "Fused flux+volume+lift:", Timer_elapsed(timer_fused)
@@ -73,6 +85,9 @@ contains
     VMapM, VMapP, normal_fn, Escale, Fscale, & ! (in)
     Nq, Np, NfpTot, Ne, NeA )                  ! (in)
 
+#ifdef _CUDA
+    use mod_advect3d_eq_cuf, only: advect3d_eq_cal_tend_cuf
+#endif
      implicit none
     integer, intent(in) :: Nq
     integer, intent(in) :: Np
@@ -103,7 +118,24 @@ contains
     real(RP) :: LiftBndFlux(Np)
     !------------------------------------------------------------
 
-    if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_FUSED ) then
+    if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_CUF .or. &
+         tend_kernel_typeid == TEND_KERNEL_TYPEID_CUF_TC ) then
+
+#ifdef _CUDA
+      call Timer_start(timer_cuf)
+      call advect3d_eq_cal_tend_cuf( dqdt,    & ! (inout)
+        q, u, v, w,                              & ! (in)
+        D1D, D1D_tr, Lift_mat,                   & ! (in)
+        VMapM, VMapP, normal_fn, Escale, Fscale, & ! (in)
+        Nq, Np, NfpTot, Ne, NeA,                 & ! (in)
+        tend_kernel_typeid == TEND_KERNEL_TYPEID_CUF_TC )
+      call Timer_stop(timer_cuf)
+#else
+      write(*,*) "TendencyKernel_Type CUF/CUF_TC requires a CUDA Fortran build (nvfortran -cuda)"
+      error stop
+#endif
+
+    else if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_FUSED ) then
 
       call Timer_start(timer_fused)
       !$omp parallel do private( flux_e, flux_x, flux_y, flux_z, &
