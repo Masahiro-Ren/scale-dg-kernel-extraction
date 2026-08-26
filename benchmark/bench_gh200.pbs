@@ -79,11 +79,23 @@ for V in $VARIANTS; do
     echo "  SPLIT: reference"
   elif diff -q <(grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_${V}.log") \
                <(grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_SPLIT.log") > /dev/null; then
-    echo "  $V: bitwise identical to SPLIT"
+    echo "  $V: PASS (bitwise identical to SPLIT)"
   else
-    echo "  $V: differs from SPLIT (expected ~1-2 ULP for DMMA); last step:"
-    grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_${V}.log" | tail -1
-    grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_SPLIT.log" | tail -1
+    # Not bitwise: judge by magnitude. Reordered accumulation (DMMA's
+    # in-instruction k4 sum) legitimately differs at ULP level; anything
+    # beyond the tolerance is a real defect.
+    MAXD=$(paste <(grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_${V}.log") \
+                 <(grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_SPLIT.log") | \
+      awk 'function ab(x){return x<0?-x:x}
+           {d=ab($2-$5); e=ab($3-$6); if(e>d)d=e; if(d>m)m=d}
+           END{printf "%.3e", m}')
+    if awk -v m="$MAXD" 'BEGIN{exit !(m+0 < 1.0e-12)}'; then
+      echo "  $V: PASS (reordered arithmetic; max|diff| vs SPLIT = $MAXD, ULP level)"
+    else
+      echo "  $V: FAIL (max|diff| vs SPLIT = $MAXD); last step:"
+      grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_${V}.log" | tail -1
+      grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_SPLIT.log" | tail -1
+    fi
   fi
 done
 
