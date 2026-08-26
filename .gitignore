@@ -7,3 +7,4 @@ advect3d/advect3d
 
 CLAUDE.md
 doc/
+benchmark/bench_gh200_*/

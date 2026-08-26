@@ -1,0 +1,129 @@
+#!/bin/bash
+#-------------------------------------------------------------------------------
+# GH200 benchmark of the tendency-kernel variants (branch opt/acc-cuf).
+#
+# Submit from the repository root:   qsub benchmark/bench_gh200.pbs
+# (submitting from benchmark/ also works). Results land in
+# benchmark/bench_gh200_<timestamp>/ with a summary table at the end of
+# the job log and in summary.tsv.
+#
+# Fill in <group-name> and <queue-name> below; adjust the select/walltime
+# lines and the module name to the site's convention if needed.
+#-------------------------------------------------------------------------------
+#PBS -q <queue-name>
+#PBS -W group_list=<group-name>
+#PBS -l select=1
+#PBS -l walltime=00:30:00
+#PBS -N scaledg-bench
+#PBS -j oe
+
+set -u
+cd "${PBS_O_WORKDIR:-$(pwd)}"
+# build/run need the repository root (Makefile, operator_data/); allow
+# submission from the repo root or from benchmark/
+[ -f Makefile ] || cd ..
+[ -f Makefile ] || { echo "error: submit from the repository root"; exit 1; }
+
+module purge
+module load nvhpc   # adjust to the site module name (e.g. nvidia, nvhpc-hpcx)
+
+GPU_ARCH=${GPU_ARCH:-cc90}   # GH200 (Hopper); override via env for other GPUs
+SM_ARCH=${SM_ARCH:-sm_90}    # matching arch for the nvcc-built .cu kernels
+
+RESULT_DIR="benchmark/bench_gh200_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$RESULT_DIR"
+
+#- Environment record ----------------------------------------------------------
+{
+  nvidia-smi --query-gpu=name,memory.total,compute_cap,power.limit --format=csv
+  nvfortran --version | head -2
+  nvcc --version | tail -2
+  git rev-parse --abbrev-ref HEAD 2>/dev/null && git rev-parse --short HEAD 2>/dev/null
+} > "$RESULT_DIR/env.txt" 2>&1
+
+#- Build -----------------------------------------------------------------------
+make clean > /dev/null 2>&1
+if ! make FC=nvfortran FFLAGS="-O3 -cuda -acc=gpu -gpu=${GPU_ARCH} -Minfo=accel" \
+          NVCCFLAGS="-O3 -arch=${SM_ARCH}" > "$RESULT_DIR/build.log" 2>&1; then
+  echo "BUILD FAILED — tail of build.log:"
+  tail -30 "$RESULT_DIR/build.log"
+  exit 1
+fi
+echo "build OK"
+
+BIN=./scale-dg_extraction
+VARIANTS="SPLIT FUSED CUF CUF_TC DMMA CUF_DSM"
+
+gen_conf () {  # gen_conf <file> <Ne> <dt> <nstep> <interval> <variant>
+  cat > "$1" <<EOF
+&PARAM_ADVECT3D
+  NeX = $2, NeY = $2, NeZ = $2,
+  PolyOrder = 7,
+  DGOptrKernel_OptType = "OPT1"
+  TendencyKernel_Type = "$6"
+  dt    = $3,
+  nstep = $4,
+  output_interval = $5,
+/
+EOF
+}
+
+#- Correctness: 4^3, 1000 steps, every variant vs SPLIT ------------------------
+echo "=== correctness (4^3, p=7, 1000 steps) ==="
+for V in $VARIANTS; do
+  gen_conf "$RESULT_DIR/ne4_${V}.conf" 4 1.0D-3 1000 100 "$V"
+  if ! $BIN "$RESULT_DIR/ne4_${V}.conf" > "$RESULT_DIR/correct_${V}.log" 2>&1; then
+    echo "  $V: RUN FAILED"; continue
+  fi
+  if [ "$V" = "SPLIT" ]; then
+    echo "  SPLIT: reference"
+  elif diff -q <(grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_${V}.log") \
+               <(grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_SPLIT.log") > /dev/null; then
+    echo "  $V: bitwise identical to SPLIT"
+  else
+    echo "  $V: differs from SPLIT (expected ~1-2 ULP for DMMA); last step:"
+    grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_${V}.log" | tail -1
+    grep -E '^\s+[0-9]+' "$RESULT_DIR/correct_SPLIT.log" | tail -1
+  fi
+done
+
+#- Benchmark matrix: sizes x variants, 100 steps -------------------------------
+# dt scaled with resolution for CFL; performance is dt-independent.
+echo "=== benchmark (p=7, nstep=100) ==="
+SIZES="8 16 32 64"
+dt_for () { case $1 in 8|16) echo 5.0D-4;; 32) echo 2.0D-4;; 64) echo 1.0D-4;; esac; }
+
+SUMMARY="$RESULT_DIR/summary.tsv"
+printf "variant\tNe\tMain[s]\tCal_tend[s]\n" > "$SUMMARY"
+for NE in $SIZES; do
+  for V in $VARIANTS; do
+    CONF="$RESULT_DIR/ne${NE}_${V}.conf"
+    LOG="$RESULT_DIR/bench_ne${NE}_${V}.log"
+    gen_conf "$CONF" "$NE" "$(dt_for $NE)" 100 100 "$V"
+    if $BIN "$CONF" > "$LOG" 2>&1; then
+      MAIN=$(awk '/Main:/{print $2}' "$LOG")
+      TEND=$(awk '/Cal_tend:/{print $2}' "$LOG")
+      printf "%s\t%s\t%s\t%s\n" "$V" "${NE}^3" "$MAIN" "$TEND" >> "$SUMMARY"
+      echo "  ne=${NE} ${V}: Main=${MAIN}  Cal_tend=${TEND}"
+    else
+      printf "%s\t%s\tFAILED\tFAILED\n" "$V" "${NE}^3" >> "$SUMMARY"
+      echo "  ne=${NE} ${V}: FAILED (see $LOG)"
+    fi
+  done
+done
+
+echo "=== summary ==="
+column -t "$SUMMARY" 2>/dev/null || cat "$SUMMARY"
+
+# Optional deep profile of the tensor-core question (uncomment; needs ncu):
+# M="gpu__time_duration.sum,dram__throughput.avg.pct_of_peak_sustained_elapsed,\
+# sm__pipe_fp64_cycles_active.avg.pct_of_peak_sustained_elapsed,\
+# sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed,\
+# l1tex__data_pipe_lsu_wavefronts_mem_shared.avg.pct_of_peak_sustained_elapsed"
+# for V in CUF DMMA; do
+#   gen_conf "$RESULT_DIR/prof_${V}.conf" 16 5.0D-4 1 1 "$V"
+#   ncu -k regex:cal_tend --launch-count 1 --metrics "$M" \
+#     $BIN "$RESULT_DIR/prof_${V}.conf" > "$RESULT_DIR/ncu_${V}.log" 2>&1
+# done
+
+echo "done — results in $RESULT_DIR/"
