@@ -36,6 +36,10 @@ module mod_advect3d_eq
   !> Fused CUDA C++ kernel with inline-PTX FP64 DMMA contractions
   !! (Tu et al., IEEE 2026)
   integer, parameter :: TEND_KERNEL_TYPEID_DMMA = 6
+  !> Compute-once shared-face fluxes via cluster distributed shared
+  !! memory: cluster-interior faces are computed by one owner element
+  !! and reconstructed by the partner with a single add
+  integer, parameter :: TEND_KERNEL_TYPEID_FLUX_DSM = 7
 
   integer :: mesh_NeX, mesh_NeY, mesh_NeZ  !< mesh dims (for cluster launch)
 
@@ -67,6 +71,8 @@ contains
       tend_kernel_typeid = TEND_KERNEL_TYPEID_CUF_DSM
     case ("DMMA")
       tend_kernel_typeid = TEND_KERNEL_TYPEID_DMMA
+    case ("FLUX_DSM")
+      tend_kernel_typeid = TEND_KERNEL_TYPEID_FLUX_DSM
     case default
       write(*,*) "Unsupported tend_kernel_type: ", tend_kernel_type
     end select
@@ -141,7 +147,7 @@ contains
         VMapM, VMapP, normal_fn, Escale, Fscale, & ! (in)
         Nq, Np, NfpTot, Ne, NeA,                 & ! (in)
         mesh_NeX, mesh_NeY, mesh_NeZ,            & ! (in)
-        tend_kernel_typeid - TEND_KERNEL_TYPEID_CUF ) ! 0=CUF,1=TC,2=DSM,3=DMMA
+        tend_kernel_typeid - TEND_KERNEL_TYPEID_CUF ) ! 0=CUF,1=TC,2=DSM,3=DMMA,4=FLUX_DSM
       call Timer_stop(timer_cuf)
 #else
       write(*,*) "TendencyKernel_Type CUF*/DMMA requires a CUDA Fortran build (nvfortran -cuda)"
@@ -302,7 +308,6 @@ contains
         flux_y(n) = q(n,ke) * v(n,ke)
         flux_z(n) = q(n,ke) * w(n,ke)
       end do
-
       call tensorprod_divlike_dirXYZ( &
         DxFlux, DyFlux, DzFlux,       & ! (out)
         D1D, D1D_tr,                  & ! (in)

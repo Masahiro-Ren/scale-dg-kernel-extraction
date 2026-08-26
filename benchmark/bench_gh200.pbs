@@ -52,7 +52,7 @@ fi
 echo "build OK"
 
 BIN=./scale-dg_extraction
-VARIANTS="SPLIT FUSED CUF CUF_TC DMMA CUF_DSM"
+VARIANTS="SPLIT FUSED CUF CUF_TC DMMA CUF_DSM FLUX_DSM"
 
 gen_conf () {  # gen_conf <file> <Ne> <dt> <nstep> <interval> <variant>
   cat > "$1" <<EOF
