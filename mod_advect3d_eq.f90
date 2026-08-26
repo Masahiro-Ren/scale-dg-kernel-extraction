@@ -18,17 +18,35 @@ module mod_advect3d_eq
 
   type(Timer) :: timer_ebnd_flux
   type(Timer) :: timer_dqdt
+  type(Timer) :: timer_fused
 
-  ! Work array for the element boundary flux.
+  !> Tendency kernel type: separate flux / volume+lift kernels (original)
+  integer, parameter :: TEND_KERNEL_TYPEID_SPLIT = 1
+  !> Tendency kernel type: single element loop computing the boundary flux
+  !! and the volume derivative + surface lift per element
+  integer, parameter :: TEND_KERNEL_TYPEID_FUSED = 2
+
+  integer :: tend_kernel_typeid = TEND_KERNEL_TYPEID_SPLIT
+
+  ! Work array for the element boundary flux (SPLIT kernel type only).
   ! Allocated on the heap (not as an automatic array) so that large meshes
   ! do not overflow the stack, and kept resident on the device.
   real(RP), allocatable :: ebnd_flux(:,:)
 contains
   !> Setup
 !OCL SERIAL
-  subroutine setup_advect3d_eq_setup()
+  subroutine setup_advect3d_eq_setup( tend_kernel_type )
     implicit none
+    character(len=*), intent(in) :: tend_kernel_type
     !------------------------------------------------------------------------------
+    select case( trim(tend_kernel_type) )
+    case ("SPLIT")
+      tend_kernel_typeid = TEND_KERNEL_TYPEID_SPLIT
+    case ("FUSED")
+      tend_kernel_typeid = TEND_KERNEL_TYPEID_FUSED
+    case default
+      write(*,*) "Unsupported tend_kernel_type: ", tend_kernel_type
+    end select
     return
   end subroutine setup_advect3d_eq_setup
   !> Finalize
@@ -36,8 +54,14 @@ contains
   subroutine setup_advect3d_eq_finalize()
     implicit none
     !------------------------------------------------------------------------------
-    write(*,'(A30,ES24.5)') "Element boundary flux:", Timer_elapsed(timer_ebnd_flux)
-    write(*,'(A30,ES24.5)') "Volume derivate + surface lift:", Timer_elapsed(timer_dqdt)
+    if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_FUSED ) then
+      ! Both phases run in one kernel; only the combined time is
+      ! measurable from the host.
+      write(*,'(A30,ES24.5)') "Fused flux+volume+lift:", Timer_elapsed(timer_fused)
+    else
+      write(*,'(A30,ES24.5)') "Element boundary flux:", Timer_elapsed(timer_ebnd_flux)
+      write(*,'(A30,ES24.5)') "Volume derivate + surface lift:", Timer_elapsed(timer_dqdt)
+    end if
     return
   end subroutine setup_advect3d_eq_finalize
 
@@ -69,26 +93,60 @@ contains
     real(RP), intent(in) :: Escale(Np,Ne,3)
     real(RP), intent(in) :: Fscale(NfpTot,Ne)
 
+    integer :: ke
+
+    ! Per-element work arrays for the FUSED kernel type
+    ! (thread-private on CPU, gang-private on GPU)
+    real(RP) :: flux_e(NfpTot)
+    real(RP) :: flux_x(Np), flux_y(Np), flux_z(Np)
+    real(RP) :: DxFlux(Np), DyFlux(Np), DzFlux(Np)
+    real(RP) :: LiftBndFlux(Np)
     !------------------------------------------------------------
 
-    if ( .not. allocated(ebnd_flux) ) then
-      allocate( ebnd_flux(NfpTot,Ne) )
-      !$acc enter data create(ebnd_flux)
+    if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_FUSED ) then
+
+      call Timer_start(timer_fused)
+      !$omp parallel do private( flux_e, flux_x, flux_y, flux_z, &
+      !$omp                      DxFlux, DyFlux, DzFlux, LiftBndFlux )
+      !$acc parallel loop gang default(present) &
+      !$acc private( flux_e, flux_x, flux_y, flux_z, &
+      !$acc          DxFlux, DyFlux, DzFlux, LiftBndFlux )
+      do ke = 1, Ne
+        call cal_elembnd_flux_elem( flux_e, & ! (out)
+          ke, q, u, v, w,                   & ! (in)
+          VMapM, VMapP, normal_fn, Fscale,  & ! (in)
+          Np, NfpTot, Ne, NeA )
+        call cal_dqdt_elem( dqdt,             & ! (inout)
+          ke, q, u, v, w, flux_e,             & ! (in)
+          D1D, D1D_tr, Lift_mat, Escale,      & ! (in)
+          flux_x, flux_y, flux_z,             & ! (work)
+          DxFlux, DyFlux, DzFlux, LiftBndFlux,& ! (work)
+          Nq, Np, NfpTot, Ne, NeA )
+      end do
+      call Timer_stop(timer_fused)
+
+    else ! SPLIT (original)
+
+      if ( .not. allocated(ebnd_flux) ) then
+        allocate( ebnd_flux(NfpTot,Ne) )
+        !$acc enter data create(ebnd_flux)
+      end if
+
+      call Timer_start(timer_ebnd_flux)
+      call cal_elembnd_flux( ebnd_flux,   & ! (out)
+         q, u, v, w,                      & ! (in)
+         VMapM, VMapP, normal_fn, Fscale, & ! (in)
+         Np, NfpTot, Ne, NeA )
+      call Timer_stop(timer_ebnd_flux)
+
+      call Timer_start(timer_dqdt)
+      call cal_dqdt( dqdt,               & ! (out)
+         q, u, v, w,  ebnd_flux,         & ! (in)
+         D1D, D1D_tr, Lift_mat,          & ! (in)
+         Escale, Nq, Np, NfpTot, Ne, NeA ) ! (in)
+      call Timer_stop(timer_dqdt)
+
     end if
-
-    call Timer_start(timer_ebnd_flux)
-    call cal_elembnd_flux( ebnd_flux,   & ! (out)
-       q, u, v, w,                      & ! (in)
-       VMapM, VMapP, normal_fn, Fscale, & ! (in)
-       Np, NfpTot, Ne, NeA )
-    call Timer_stop(timer_ebnd_flux)
-
-    call Timer_start(timer_dqdt)
-    call cal_dqdt( dqdt,               & ! (out)
-       q, u, v, w,  ebnd_flux,         & ! (in)
-       D1D, D1D_tr, Lift_mat,          & ! (in)
-       Escale, Nq, Np, NfpTot, Ne, NeA ) ! (in)
-    call Timer_stop(timer_dqdt)
 
      return
   end subroutine advect3d_eq_cal_tend
@@ -104,7 +162,7 @@ contains
     integer, intent(in) :: NfpTot
     integer, intent(in) :: Ne
     integer, intent(in) :: NeA
-    real(RP), intent(out) :: flux(NfpTot,Ne) 
+    real(RP), intent(out) :: flux(NfpTot,Ne)
     real(RP), intent(in) :: q_(Np*NeA)
     real(RP), intent(in) :: u_(Np*NeA)
     real(RP), intent(in) :: v_(Np*NeA)
@@ -220,4 +278,131 @@ contains
     end do
     return
   end subroutine cal_dqdt
+
+  !> Calculate the element boundary flux of a single element
+  !! (device-callable; used by the FUSED tendency kernel type)
+!OCL SERIAL
+  subroutine cal_elembnd_flux_elem( flux_e, & ! (out)
+    ke, q_, u_, v_, w_,              & ! (in)
+    VMapM, VMapP, normal_fn, Fscale, & ! (in)
+    Np, NfpTot, Ne, NeA              ) ! (in)
+!$acc routine vector
+    implicit none
+    integer, intent(in) :: Np
+    integer, intent(in) :: NfpTot
+    integer, intent(in) :: Ne
+    integer, intent(in) :: NeA
+    real(RP), intent(out) :: flux_e(NfpTot)
+    integer, intent(in) :: ke
+    real(RP), intent(in) :: q_(Np*NeA)
+    real(RP), intent(in) :: u_(Np*NeA)
+    real(RP), intent(in) :: v_(Np*NeA)
+    real(RP), intent(in) :: w_(Np*NeA)
+    integer, intent(in) :: VMapM(NfpTot,Ne)
+    integer, intent(in) :: VMapP(NfpTot,Ne)
+    real(RP), intent(in) :: normal_fn(NfpTot,Ne,3)
+    real(RP), intent(in) :: Fscale(NfpTot,Ne)
+
+    integer :: fp
+    integer :: iM, iP
+    real(RP) :: qM, qP
+    real(RP) :: VelM, VelP
+    real(RP) :: alpha
+    !------------------------------------------
+
+    !$acc loop vector private(iM,iP,qM,qP,VelM,VelP,alpha)
+    do fp = 1, NfpTot
+      iM = VMapM(fp,ke)
+      iP = VMapP(fp,ke)
+
+      qM = q_(iM)
+      qP = q_(iP)
+
+      VelM = &
+           u_(iM)*normal_fn(fp,ke,1) &
+         + v_(iM)*normal_fn(fp,ke,2) &
+         + w_(iM)*normal_fn(fp,ke,3)
+
+      VelP = &
+           u_(iP)*normal_fn(fp,ke,1) &
+         + v_(iP)*normal_fn(fp,ke,2) &
+         + w_(iP)*normal_fn(fp,ke,3)
+
+      alpha = 0.5_RP * abs( VelP + VelM )
+
+      flux_e(fp) = 0.5_RP * Fscale(fp,ke) * ( &
+           qP * VelP                           &
+         - qM * VelM                           &
+         - alpha * ( qP - qM ) )
+    end do
+    return
+  end subroutine cal_elembnd_flux_elem
+
+  !> Calculate the volume derivative and apply surface lifting of a single
+  !! element (device-callable; used by the FUSED tendency kernel type)
+  !! The work arrays are passed from the caller because automatic arrays
+  !! cannot be used inside device routines.
+!OCL SERIAL
+  subroutine cal_dqdt_elem( dqdt,  & ! (inout)
+    ke, q, u, v, w, flux_e,        & ! (in)
+    D1D, D1D_tr, Lift_mat, Escale, & ! (in)
+    flux_x, flux_y, flux_z,        & ! (work)
+    DxFlux, DyFlux, DzFlux,        & ! (work)
+    LiftBndFlux,                   & ! (work)
+    Nq, Np, NfpTot, Ne, NeA        ) ! (in)
+
+    use mod_dg_optr_kernel, only: &
+      tensorprod_divlike_dirXYZ, &
+      tensorprod_Lift_hexahedral
+!$acc routine vector
+    implicit none
+    integer, intent(in) :: Nq
+    integer, intent(in) :: Np
+    integer, intent(in) :: NfpTot
+    integer, intent(in) :: Ne
+    integer, intent(in) :: NeA
+    real(RP), intent(inout) :: dqdt(Np,NeA)
+    integer, intent(in) :: ke
+    real(RP), intent(in) :: q(Np,NeA)
+    real(RP), intent(in) :: u(Np,NeA)
+    real(RP), intent(in) :: v(Np,NeA)
+    real(RP), intent(in) :: w(Np,NeA)
+    real(RP), intent(in) :: flux_e(NfpTot)
+    real(RP), intent(in) :: D1D(Nq,Nq)
+    real(RP), intent(in) :: D1D_tr(Nq,Nq)
+    real(RP), intent(in) :: Lift_mat(Nq,Nq,Nq,6)
+    real(RP), intent(in) :: Escale(Np,Ne,3)
+    real(RP), intent(out) :: flux_x(Np), flux_y(Np), flux_z(Np)
+    real(RP), intent(out) :: DxFlux(Np), DyFlux(Np), DzFlux(Np)
+    real(RP), intent(out) :: LiftBndFlux(Np)
+
+    integer :: n
+    !------------------------------------------------------------
+
+    !$acc loop vector
+    do n = 1, Np
+      flux_x(n) = q(n,ke) * u(n,ke)
+      flux_y(n) = q(n,ke) * v(n,ke)
+      flux_z(n) = q(n,ke) * w(n,ke)
+    end do
+
+    call tensorprod_divlike_dirXYZ( &
+      DxFlux, DyFlux, DzFlux,       & ! (out)
+      D1D, D1D_tr,                  & ! (in)
+      flux_x, flux_y, flux_z, Nq    ) ! (in)
+
+    call tensorprod_Lift_hexahedral( &
+      LiftBndFlux,          & ! (out)
+      Lift_mat, flux_e, Nq  ) ! (in)
+
+    !$acc loop vector
+    do n = 1, Np
+      dqdt(n,ke) = -( &
+           Escale(n,ke,1)*DxFlux(n) &
+         + Escale(n,ke,2)*DyFlux(n) &
+         + Escale(n,ke,3)*DzFlux(n) &
+         + LiftBndFlux(n) )
+    end do
+    return
+  end subroutine cal_dqdt_elem
 end module mod_advect3d_eq
