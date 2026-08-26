@@ -28,16 +28,36 @@ module mod_advect3d_eq_cuf
 
   integer, parameter :: NTHREADS = 128
 
+  ! CUDA C++ launcher for the inline-PTX DMMA kernel (cal_tend_dmma_p7.cu),
+  ! following Tu et al. (IEEE 2026): direct PTX m8n8k4 DMMA, cyclic index
+  ! reordering, bank-conflict-free lane maps.
+  interface
+    integer(c_int) function cal_tend_dmma_p7_launch( dqdt, q, u, v, w, &
+        D1D, Lift, vmapM, vmapP, normal, escale, fscale, Ne, NeA )     &
+        bind(c, name="cal_tend_dmma_p7_launch")
+      use iso_c_binding, only: c_int, c_double
+      real(c_double), device :: dqdt(*), q(*), u(*), v(*), w(*), D1D(*), Lift(*)
+      integer(c_int), device :: vmapM(*), vmapP(*)
+      real(c_double), device :: normal(*), escale(*), fscale(*)
+      integer(c_int), value :: Ne, NeA
+    end function cal_tend_dmma_p7_launch
+  end interface
+
 contains
 
-  !> Launch the fused CUDA Fortran tendency kernel.
+  !> Launch a fused CUDA tendency kernel.
   !  Field arrays are device-resident via OpenACC data management; the
   !  device pointers are obtained with host_data use_device.
+  !  variant: 0 = FP64 FMA (CUF), 1 = FP64 WMMA tensor cores (CUF_TC),
+  !           2 = thread block cluster + DSM flux (CUF_DSM),
+  !           3 = inline-PTX DMMA per Tu et al. (DMMA)
   subroutine advect3d_eq_cal_tend_cuf( dqdt, & ! (inout)
     q, u, v, w,                              & ! (in)
     D1D, D1D_tr, Lift_mat,                   & ! (in)
     VMapM, VMapP, normal_fn, Escale, Fscale, & ! (in)
-    Nq, Np, NfpTot, Ne, NeA, use_tc )          ! (in)
+    Nq, Np, NfpTot, Ne, NeA,                 & ! (in)
+    NeX, NeY, NeZ, variant )                   ! (in)
+    use iso_c_binding, only: c_int
     implicit none
     integer, intent(in) :: Nq
     integer, intent(in) :: Np
@@ -57,7 +77,8 @@ contains
     real(RP), intent(in) :: normal_fn(NfpTot,Ne,3)
     real(RP), intent(in) :: Escale(Np,Ne,3)
     real(RP), intent(in) :: Fscale(NfpTot,Ne)
-    logical, intent(in) :: use_tc
+    integer, intent(in) :: NeX, NeY, NeZ
+    integer, intent(in) :: variant
 
     integer :: istat
     !------------------------------------------------------------
@@ -66,16 +87,35 @@ contains
       write(*,*) "CUF tendency kernels are implemented for PolyOrder = 7 only"
       error stop
     end if
+    if ( variant == 2 ) then
+      if ( mod(NeX,2) + mod(NeY,2) + mod(NeZ,2) /= 0 ) then
+        write(*,*) "CUF_DSM requires even NeX, NeY, NeZ (2x2x2 clusters)"
+        error stop
+      end if
+    end if
 
     !$acc host_data use_device(dqdt, q, u, v, w, D1D, D1D_tr, Lift_mat, &
     !$acc                      VMapM, VMapP, normal_fn, Escale, Fscale)
-    if ( use_tc ) then
+    select case ( variant )
+    case (1)
       call cal_tend_p7_tc_kernel<<<Ne, NTHREADS>>>( dqdt, q, u, v, w, &
         D1D, D1D_tr, Lift_mat, VMapM, VMapP, normal_fn, Escale, Fscale, Ne, NeA )
-    else
+    case (2)
+      call cal_tend_p7_dsm_kernel<<<dim3(NeX,NeY,NeZ), NTHREADS>>>( &
+        dqdt, q, u, v, w, &
+        D1D, D1D_tr, Lift_mat, VMapM, VMapP, normal_fn, Escale, Fscale, &
+        NeX, NeY, Ne, NeA )
+    case (3)
+      istat = cal_tend_dmma_p7_launch( dqdt, q, u, v, w, D1D, Lift_mat, &
+        VMapM, VMapP, normal_fn, Escale, Fscale, Ne, NeA )
+      if ( istat /= 0 ) then
+        write(*,*) "DMMA kernel launch failed, code ", istat
+        error stop
+      end if
+    case default
       call cal_tend_p7_kernel<<<Ne, NTHREADS>>>( dqdt, q, u, v, w, &
         D1D, D1D_tr, Lift_mat, VMapM, VMapP, normal_fn, Escale, Fscale, Ne, NeA )
-    end if
+    end select
     !$acc end host_data
 
     ! CUF kernel launches are asynchronous; synchronize so host timers
@@ -353,6 +393,176 @@ contains
     end do
     return
   end subroutine cal_tend_p7_tc_kernel
+
+  !> Fused tendency kernel for p=7 with 2x2x2 thread block clusters.
+  !  The grid is launched as (NeX, NeY, NeZ), so each cluster covers a
+  !  2x2x2 brick of elements; for each element, one face neighbor per
+  !  direction (3 of 6 faces) is in-cluster and its staged field values
+  !  are read via distributed shared memory instead of global gathers.
+  !  Periodic-wrap neighbors point into the halo (keP > Ne) and never
+  !  match a cluster partner, so they take the global path.
+  attributes(global) cluster_dims(2,2,2) subroutine cal_tend_p7_dsm_kernel( &
+    dqdt, q_, u_, v_, w_, &
+    D1D, D1D_tr, Lift_mat, VMapM, VMapP, normal_fn, Escale, Fscale, &
+    NeX, NeY, Ne, NeA )
+    use cooperative_groups
+    implicit none
+    integer, value :: NeX, NeY, Ne, NeA
+    real(RP) :: dqdt(512*NeA)
+    real(RP) :: q_(512*NeA), u_(512*NeA), v_(512*NeA), w_(512*NeA)
+    real(RP) :: D1D(8,8), D1D_tr(8,8)
+    real(RP) :: Lift_mat(8,8,8,6)
+    integer :: VMapM(384,Ne), VMapP(384,Ne)
+    real(RP) :: normal_fn(384,Ne,3)
+    real(RP) :: Escale(512,Ne,3)
+    real(RP) :: Fscale(384,Ne)
+
+    type(cluster_group) :: cluster
+
+    real(RP), shared :: s_q(512), s_u(512), s_v(512), s_w(512)
+    real(RP), shared :: s_fx(8,64), s_fy(8,8,8), s_fz(64,8)
+    real(RP), shared :: s_fe(8,8,6)
+    real(RP), shared :: s_D(8,8), s_Dt(8,8)
+
+    ! Remote (distributed shared memory) views of a partner block's staging
+    real(RP), shared :: r_q(512); pointer(p_rq, r_q)
+    real(RP), shared :: r_u(512); pointer(p_ru, r_u)
+    real(RP), shared :: r_v(512); pointer(p_rv, r_v)
+    real(RP), shared :: r_w(512); pointer(p_rw, r_w)
+
+    integer :: ke, t, nbase
+    integer :: cx0, cy0, cz0, myrank0
+    integer :: nbr_x, nbr_y, nbr_z, rank_x, rank_y, rank_z
+    integer :: n, fp, i, j, k, ij, jk, l, f, a, b, r
+    integer :: iM, iP, keP, rr, nl
+    real(RP) :: qM, qP, VelM, VelP, alpha
+    real(RP) :: Dx, Dy, Dz, lift
+    !------------------------------------------------------------
+
+    ke = blockIdx%x + (blockIdx%y-1)*NeX + (blockIdx%z-1)*NeX*NeY
+    t  = threadIdx%x
+    nbase = (ke-1)*512
+
+    cluster = this_cluster()
+
+    ! Cluster-local coords and the in-cluster face partner per direction
+    ! (rank order verified: rank = 1 + cx0 + 2*cy0 + 4*cz0, x fastest)
+    cx0 = mod(blockIdx%x-1, 2)
+    cy0 = mod(blockIdx%y-1, 2)
+    cz0 = mod(blockIdx%z-1, 2)
+    myrank0 = cx0 + 2*cy0 + 4*cz0
+    nbr_x = ke + (1 - 2*cx0)
+    nbr_y = ke + (1 - 2*cy0)*NeX
+    nbr_z = ke + (1 - 2*cz0)*NeX*NeY
+    rank_x = 1 + ieor(myrank0, 1)
+    rank_y = 1 + ieor(myrank0, 2)
+    rank_z = 1 + ieor(myrank0, 4)
+
+    if ( t <= 64 ) then
+      i = mod(t-1,8) + 1
+      j = (t-1)/8 + 1
+      s_D(i,j)  = D1D(i,j)
+      s_Dt(i,j) = D1D_tr(i,j)
+    end if
+
+    do n = t, 512, 128
+      s_q(n) = q_(nbase+n)
+      s_u(n) = u_(nbase+n)
+      s_v(n) = v_(nbase+n)
+      s_w(n) = w_(nbase+n)
+    end do
+    ! Peers read our staging via DSM: cluster-wide barrier, not block-local
+    call syncthreads(cluster)
+
+    do n = t, 512, 128
+      i  = mod(n-1,8) + 1
+      jk = (n-1)/8 + 1
+      j  = mod(jk-1,8) + 1
+      k  = (jk-1)/8 + 1
+      ij = i + (j-1)*8
+      s_fx(i,jk)  = s_q(n)*s_u(n)
+      s_fy(i,j,k) = s_q(n)*s_v(n)
+      s_fz(ij,k)  = s_q(n)*s_w(n)
+    end do
+
+    do fp = t, 384, 128
+      iM = VMapM(fp,ke)
+      iP = VMapP(fp,ke)
+
+      qM = s_q(iM-nbase)
+      VelM = s_u(iM-nbase)*normal_fn(fp,ke,1) &
+           + s_v(iM-nbase)*normal_fn(fp,ke,2) &
+           + s_w(iM-nbase)*normal_fn(fp,ke,3)
+
+      keP = (iP-1)/512 + 1
+      if ( keP == nbr_x ) then
+        rr = rank_x
+      else if ( keP == nbr_y ) then
+        rr = rank_y
+      else if ( keP == nbr_z ) then
+        rr = rank_z
+      else
+        rr = 0
+      end if
+
+      if ( rr /= 0 ) then
+        ! neighbor is in this cluster: read its shared-memory staging
+        p_rq = cluster_map_shared_rank(s_q, rr)
+        p_ru = cluster_map_shared_rank(s_u, rr)
+        p_rv = cluster_map_shared_rank(s_v, rr)
+        p_rw = cluster_map_shared_rank(s_w, rr)
+        nl = iP - (keP-1)*512
+        qP = r_q(nl)
+        VelP = r_u(nl)*normal_fn(fp,ke,1) &
+             + r_v(nl)*normal_fn(fp,ke,2) &
+             + r_w(nl)*normal_fn(fp,ke,3)
+      else
+        qP = q_(iP)
+        VelP = u_(iP)*normal_fn(fp,ke,1) &
+             + v_(iP)*normal_fn(fp,ke,2) &
+             + w_(iP)*normal_fn(fp,ke,3)
+      end if
+
+      alpha = 0.5_RP * abs( VelP + VelM )
+
+      f = (fp-1)/64 + 1
+      r = mod(fp-1,64)
+      a = mod(r,8) + 1
+      b = r/8 + 1
+      s_fe(a,b,f) = 0.5_RP * Fscale(fp,ke) * ( &
+           qP * VelP - qM * VelM - alpha * ( qP - qM ) )
+    end do
+    ! No block may exit (or proceed past flux) while peers still read its
+    ! staging remotely
+    call syncthreads(cluster)
+
+    do n = t, 512, 128
+      i  = mod(n-1,8) + 1
+      jk = (n-1)/8 + 1
+      j  = mod(jk-1,8) + 1
+      k  = (jk-1)/8 + 1
+      ij = i + (j-1)*8
+
+      Dx = 0.0_RP; Dy = 0.0_RP; Dz = 0.0_RP
+      do l = 1, 8
+        Dx = Dx + s_D(i,l)    * s_fx(l,jk)
+        Dy = Dy + s_fy(i,l,k) * s_Dt(l,j)
+        Dz = Dz + s_fz(ij,l)  * s_Dt(l,k)
+      end do
+
+      lift = Lift_mat(i,j,k,1)*s_fe(i,k,1) &
+           + Lift_mat(i,j,k,2)*s_fe(j,k,2) &
+           + Lift_mat(i,j,k,3)*s_fe(i,k,3) &
+           + Lift_mat(i,j,k,4)*s_fe(j,k,4) &
+           + Lift_mat(i,j,k,5)*s_fe(i,j,5) &
+           + Lift_mat(i,j,k,6)*s_fe(i,j,6)
+
+      dqdt(nbase+n) = -( Escale(n,ke,1)*Dx &
+                       + Escale(n,ke,2)*Dy &
+                       + Escale(n,ke,3)*Dz + lift )
+    end do
+    return
+  end subroutine cal_tend_p7_dsm_kernel
 
 end module mod_advect3d_eq_cuf
 #else

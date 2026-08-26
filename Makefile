@@ -7,6 +7,9 @@ FFLAGS ?= -O3 -fopenmp
 #   make FC=nvfortran FFLAGS="-O3 -cuda -acc=gpu -gpu=cc120 -Minfo=accel"   # RTX PRO 6000 Blackwell
 #   make FC=nvfortran FFLAGS="-O3 -cuda -acc=gpu -gpu=cc90 -Minfo=accel"    # GH200
 
+NVCC      ?= nvcc
+NVCCFLAGS ?= -O3 -arch=native
+
 TARGET = scale-dg_extraction
 OBJS   = mod_common.o         \
          mod_mesh.o                \
@@ -16,12 +19,18 @@ OBJS   = mod_common.o         \
 		 mod_advect3d_eq.o         \
 		 main.o
 
+# CUDA C++ kernels (inline-PTX DMMA) are only built/linked for CUDA builds
+ifneq (,$(findstring -cuda,$(FFLAGS)))
+OBJS   += cal_tend_dmma_p7.o
+LDLIBS += -lstdc++
+endif
+
 .PHONY: all clean
 
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(FC) $(FFLAGS) -o $@ $^
+	$(FC) $(FFLAGS) -o $@ $^ $(LDLIBS)
 
 %.f90 : %.F90.erb
 	erb $< > $@
@@ -37,6 +46,9 @@ mod_dg_optr_kernel_opt1.f90: mod_dg_optr_kernel_opt1.F90.erb
 
 %.o: %.F90
 	$(FC) $(FFLAGS) -c $<
+
+%.o: %.cu
+	$(NVCC) $(NVCCFLAGS) -c $<
 
 
 # Dependency

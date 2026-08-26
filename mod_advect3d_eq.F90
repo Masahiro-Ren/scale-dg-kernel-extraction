@@ -30,6 +30,14 @@ module mod_advect3d_eq
   integer, parameter :: TEND_KERNEL_TYPEID_CUF = 3
   !> Same as CUF with the tensor contractions on FP64 tensor cores
   integer, parameter :: TEND_KERNEL_TYPEID_CUF_TC = 4
+  !> Same as CUF with 2x2x2 thread block clusters: in-cluster flux
+  !! neighbors are read via distributed shared memory
+  integer, parameter :: TEND_KERNEL_TYPEID_CUF_DSM = 5
+  !> Fused CUDA C++ kernel with inline-PTX FP64 DMMA contractions
+  !! (Tu et al., IEEE 2026)
+  integer, parameter :: TEND_KERNEL_TYPEID_DMMA = 6
+
+  integer :: mesh_NeX, mesh_NeY, mesh_NeZ  !< mesh dims (for cluster launch)
 
   integer :: tend_kernel_typeid = TEND_KERNEL_TYPEID_SPLIT
 
@@ -40,10 +48,12 @@ module mod_advect3d_eq
 contains
   !> Setup
 !OCL SERIAL
-  subroutine setup_advect3d_eq_setup( tend_kernel_type )
+  subroutine setup_advect3d_eq_setup( tend_kernel_type, NeX, NeY, NeZ )
     implicit none
     character(len=*), intent(in) :: tend_kernel_type
+    integer, intent(in) :: NeX, NeY, NeZ
     !------------------------------------------------------------------------------
+    mesh_NeX = NeX; mesh_NeY = NeY; mesh_NeZ = NeZ
     select case( trim(tend_kernel_type) )
     case ("SPLIT")
       tend_kernel_typeid = TEND_KERNEL_TYPEID_SPLIT
@@ -53,6 +63,10 @@ contains
       tend_kernel_typeid = TEND_KERNEL_TYPEID_CUF
     case ("CUF_TC")
       tend_kernel_typeid = TEND_KERNEL_TYPEID_CUF_TC
+    case ("CUF_DSM")
+      tend_kernel_typeid = TEND_KERNEL_TYPEID_CUF_DSM
+    case ("DMMA")
+      tend_kernel_typeid = TEND_KERNEL_TYPEID_DMMA
     case default
       write(*,*) "Unsupported tend_kernel_type: ", tend_kernel_type
     end select
@@ -63,8 +77,7 @@ contains
   subroutine setup_advect3d_eq_finalize()
     implicit none
     !------------------------------------------------------------------------------
-    if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_CUF .or. &
-         tend_kernel_typeid == TEND_KERNEL_TYPEID_CUF_TC ) then
+    if ( tend_kernel_typeid >= TEND_KERNEL_TYPEID_CUF ) then
       write(*,'(A30,ES24.5)') "CUF fused tendency:", Timer_elapsed(timer_cuf)
     else if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_FUSED ) then
       ! Both phases run in one kernel; only the combined time is
@@ -118,8 +131,7 @@ contains
     real(RP) :: LiftBndFlux(Np)
     !------------------------------------------------------------
 
-    if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_CUF .or. &
-         tend_kernel_typeid == TEND_KERNEL_TYPEID_CUF_TC ) then
+    if ( tend_kernel_typeid >= TEND_KERNEL_TYPEID_CUF ) then
 
 #ifdef _CUDA
       call Timer_start(timer_cuf)
@@ -128,10 +140,11 @@ contains
         D1D, D1D_tr, Lift_mat,                   & ! (in)
         VMapM, VMapP, normal_fn, Escale, Fscale, & ! (in)
         Nq, Np, NfpTot, Ne, NeA,                 & ! (in)
-        tend_kernel_typeid == TEND_KERNEL_TYPEID_CUF_TC )
+        mesh_NeX, mesh_NeY, mesh_NeZ,            & ! (in)
+        tend_kernel_typeid - TEND_KERNEL_TYPEID_CUF ) ! 0=CUF,1=TC,2=DSM,3=DMMA
       call Timer_stop(timer_cuf)
 #else
-      write(*,*) "TendencyKernel_Type CUF/CUF_TC requires a CUDA Fortran build (nvfortran -cuda)"
+      write(*,*) "TendencyKernel_Type CUF*/DMMA requires a CUDA Fortran build (nvfortran -cuda)"
       error stop
 #endif
 

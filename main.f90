@@ -149,7 +149,7 @@ contains
     call dg_optr_kernel_setup( DGOptrKernel_OptType )
 
     !- Initialize a advection equation module
-    call setup_advect3d_eq_setup( TendencyKernel_Type )
+    call setup_advect3d_eq_setup( TendencyKernel_Type, NeX, NeY, NeZ )
 
     !- Set initial condition
 
