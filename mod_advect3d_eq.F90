@@ -36,6 +36,11 @@ module mod_advect3d_eq
   !> Fused CUDA C++ kernel with inline-PTX FP64 DMMA contractions
   !! (Tu et al., IEEE 2026)
   integer, parameter :: TEND_KERNEL_TYPEID_DMMA = 6
+  !> Register-blocked columns: 64 threads/element, z-column per thread
+  !! in registers, x/y contractions via 8x8 shared slices
+  integer, parameter :: TEND_KERNEL_TYPEID_CUF_COL = 7
+  !> One warp per element: shuffle-based x/y contractions, register z
+  integer, parameter :: TEND_KERNEL_TYPEID_CUF_WARP = 8
 
   integer :: mesh_NeX, mesh_NeY, mesh_NeZ  !< mesh dims (for cluster launch)
 
@@ -67,6 +72,10 @@ contains
       tend_kernel_typeid = TEND_KERNEL_TYPEID_CUF_DSM
     case ("DMMA")
       tend_kernel_typeid = TEND_KERNEL_TYPEID_DMMA
+    case ("CUF_COL")
+      tend_kernel_typeid = TEND_KERNEL_TYPEID_CUF_COL
+    case ("CUF_WARP")
+      tend_kernel_typeid = TEND_KERNEL_TYPEID_CUF_WARP
     case default
       write(*,*) "Unsupported tend_kernel_type: ", tend_kernel_type
     end select

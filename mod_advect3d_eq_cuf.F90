@@ -50,7 +50,9 @@ contains
   !  device pointers are obtained with host_data use_device.
   !  variant: 0 = FP64 FMA (CUF), 1 = FP64 WMMA tensor cores (CUF_TC),
   !           2 = thread block cluster + DSM flux (CUF_DSM),
-  !           3 = inline-PTX DMMA per Tu et al. (DMMA)
+  !           3 = inline-PTX DMMA per Tu et al. (DMMA),
+  !           4 = register-blocked columns, 64 threads/element (CUF_COL),
+  !           5 = one warp/element, shuffle-based contractions (CUF_WARP)
   subroutine advect3d_eq_cal_tend_cuf( dqdt, & ! (inout)
     q, u, v, w,                              & ! (in)
     D1D, D1D_tr, Lift_mat,                   & ! (in)
@@ -112,6 +114,12 @@ contains
         write(*,*) "DMMA kernel launch failed, code ", istat
         error stop
       end if
+    case (4)
+      call cal_tend_p7_col_kernel<<<Ne, 64>>>( dqdt, q, u, v, w, &
+        D1D, Lift_mat, VMapM, VMapP, normal_fn, Escale, Fscale, Ne, NeA )
+    case (5)
+      call cal_tend_p7_warp_kernel<<<Ne, 32>>>( dqdt, q, u, v, w, &
+        D1D, Lift_mat, VMapM, VMapP, normal_fn, Escale, Fscale, Ne, NeA )
     case default
       call cal_tend_p7_kernel<<<Ne, NTHREADS>>>( dqdt, q, u, v, w, &
         D1D, D1D_tr, Lift_mat, VMapM, VMapP, normal_fn, Escale, Fscale, Ne, NeA )
@@ -563,6 +571,259 @@ contains
     end do
     return
   end subroutine cal_tend_p7_dsm_kernel
+
+  !> Fused tendency kernel for p=7 with register-blocked columns
+  !! (the MFEM/libParanumal design): 64 threads per element, one per
+  !! (i,j) node column; each thread keeps its z-column of volume fluxes
+  !! and accumulators in registers. The z contraction runs entirely in
+  !! registers; the x and y contractions stream one 8x8 slice at a time
+  !! through 0.5 KB of shared memory. Shared memory per element drops
+  !! from 32 KB to ~4.5 KB, so occupancy is no longer shared-limited,
+  !! and barriers synchronize only 2 warps.
+  attributes(global) subroutine cal_tend_p7_col_kernel( dqdt, q_, u_, v_, w_, &
+    D1D, Lift_mat, VMapM, VMapP, normal_fn, Escale, Fscale, Ne, NeA )
+    implicit none
+    integer, value :: Ne, NeA
+    real(RP) :: dqdt(512*NeA)
+    real(RP) :: q_(512*NeA), u_(512*NeA), v_(512*NeA), w_(512*NeA)
+    real(RP) :: D1D(8,8)
+    real(RP) :: Lift_mat(8,8,8,6)
+    integer :: VMapM(384,Ne), VMapP(384,Ne)
+    real(RP) :: normal_fn(384,Ne,3)
+    real(RP) :: Escale(512,Ne,3)
+    real(RP) :: Fscale(384,Ne)
+
+    real(RP), shared :: s_D(8,8)
+    real(RP), shared :: s_sl(8,8)    ! one contraction slice
+    real(RP), shared :: s_fe(8,8,6)
+
+    ! per-thread z-column state
+    real(RP) :: fx(8), fy(8), fz(8)
+    real(RP) :: accx(8), accy(8), accz(8)
+
+    integer :: ke, t, i, j, k, l, n, n0, nbase, fp
+    integer :: iM, iP, f, r, a, b
+    real(RP) :: qn, tmp
+    real(RP) :: qM, qP, VelM, VelP, alpha
+    !------------------------------------------------------------
+
+    ke = blockIdx%x
+    t  = threadIdx%x            ! 1..64
+    i  = mod(t-1,8) + 1
+    j  = (t-1)/8 + 1
+    nbase = (ke-1)*512
+    n0 = nbase + i + (j-1)*8    ! node (i,j,1); stride 64 in k
+
+    s_D(i,j) = D1D(i,j)
+
+    ! column loads + volume flux products, register-resident
+    do k = 1, 8
+      qn    = q_(n0 + 64*(k-1))
+      fx(k) = qn * u_(n0 + 64*(k-1))
+      fy(k) = qn * v_(n0 + 64*(k-1))
+      fz(k) = qn * w_(n0 + 64*(k-1))
+    end do
+
+    ! element boundary flux, 6 face nodes per thread
+    do fp = t, 384, 64
+      iM = VMapM(fp,ke)
+      iP = VMapP(fp,ke)
+
+      qM = q_(iM)
+      qP = q_(iP)
+
+      VelM = u_(iM)*normal_fn(fp,ke,1) &
+           + v_(iM)*normal_fn(fp,ke,2) &
+           + w_(iM)*normal_fn(fp,ke,3)
+      VelP = u_(iP)*normal_fn(fp,ke,1) &
+           + v_(iP)*normal_fn(fp,ke,2) &
+           + w_(iP)*normal_fn(fp,ke,3)
+
+      alpha = 0.5_RP * abs( VelP + VelM )
+
+      f = (fp-1)/64 + 1
+      r = mod(fp-1,64)
+      a = mod(r,8) + 1
+      b = r/8 + 1
+      s_fe(a,b,f) = 0.5_RP * Fscale(fp,ke) * ( &
+           qP * VelP - qM * VelM - alpha * ( qP - qM ) )
+    end do
+    call syncthreads()   ! s_D and s_fe complete
+
+    ! z contraction: entirely in registers
+    do k = 1, 8
+      tmp = 0.0_RP
+      do l = 1, 8
+        tmp = tmp + s_D(k,l) * fz(l)
+      end do
+      accz(k) = tmp
+    end do
+
+    ! x contraction: one 8x8 slice per level through shared memory
+    do k = 1, 8
+      s_sl(i,j) = fx(k)
+      call syncthreads()
+      tmp = 0.0_RP
+      do l = 1, 8
+        tmp = tmp + s_D(i,l) * s_sl(l,j)
+      end do
+      accx(k) = tmp
+      call syncthreads()
+    end do
+
+    ! y contraction
+    do k = 1, 8
+      s_sl(i,j) = fy(k)
+      call syncthreads()
+      tmp = 0.0_RP
+      do l = 1, 8
+        tmp = tmp + s_D(j,l) * s_sl(i,l)
+      end do
+      accy(k) = tmp
+      call syncthreads()
+    end do
+
+    ! lift + combine, write the column
+    do k = 1, 8
+      tmp = Lift_mat(i,j,k,1)*s_fe(i,k,1) &
+          + Lift_mat(i,j,k,2)*s_fe(j,k,2) &
+          + Lift_mat(i,j,k,3)*s_fe(i,k,3) &
+          + Lift_mat(i,j,k,4)*s_fe(j,k,4) &
+          + Lift_mat(i,j,k,5)*s_fe(i,j,5) &
+          + Lift_mat(i,j,k,6)*s_fe(i,j,6)
+      n = i + (j-1)*8 + (k-1)*64
+      dqdt(nbase+n) = -( Escale(n,ke,1)*accx(k) &
+                       + Escale(n,ke,2)*accy(k) &
+                       + Escale(n,ke,3)*accz(k) + tmp )
+    end do
+    return
+  end subroutine cal_tend_p7_col_kernel
+
+  !> Fused tendency kernel for p=7 with ONE WARP per element and
+  !! shuffle-based contractions. Lane (i,j4), j4=1..4, owns the 16 nodes
+  !! (i, j4+4*jh, k) for jh=0,1 and k=1..8, keeping the volume fluxes in
+  !! registers as f*(k, jh+1). Cross-thread data exchange for the x and
+  !! y contractions uses warp shuffles:
+  !!   x: fx at (l,j,k) lives in lane (l,j4), same register half  -> shfl
+  !!   y: fy at (i,l,k) lives in lane (i,l4), register half lh    -> shfl
+  !!   z: in-thread registers, no communication at all
+  !! No shared memory or barriers are needed for the contractions
+  !! (shared holds only D1D and the face fluxes; the single syncthreads
+  !! synchronizes one warp). Occupancy is register-limited by design -
+  !! the bet is 16-deep ILP per lane instead of many warps.
+  attributes(global) subroutine cal_tend_p7_warp_kernel( dqdt, q_, u_, v_, w_, &
+    D1D, Lift_mat, VMapM, VMapP, normal_fn, Escale, Fscale, Ne, NeA )
+    use cudadevice
+    implicit none
+    integer, value :: Ne, NeA
+    real(RP) :: dqdt(512*NeA)
+    real(RP) :: q_(512*NeA), u_(512*NeA), v_(512*NeA), w_(512*NeA)
+    real(RP) :: D1D(8,8)
+    real(RP) :: Lift_mat(8,8,8,6)
+    integer :: VMapM(384,Ne), VMapP(384,Ne)
+    real(RP) :: normal_fn(384,Ne,3)
+    real(RP) :: Escale(512,Ne,3)
+    real(RP) :: Fscale(384,Ne)
+
+    real(RP), shared :: s_D(8,8)
+    real(RP), shared :: s_fe(8,8,6)
+
+    ! 16-node register block of volume fluxes: (k, jh+1)
+    real(RP) :: fx(8,2), fy(8,2), fz(8,2)
+
+
+    integer :: ke, t, i, j4, jh, j, k, l, l4, lh, n, fp, nbase
+    integer :: iM, iP, f, r, a, b
+    real(RP) :: qn, v, dx, dy, dz, lift
+    real(RP) :: qM, qP, VelM, VelP, alpha
+    !------------------------------------------------------------
+
+    ke = blockIdx%x
+    t  = threadIdx%x            ! 1..32
+    i  = mod(t-1,8) + 1
+    j4 = (t-1)/8 + 1            ! 1..4
+    nbase = (ke-1)*512
+
+    s_D(i,j4)   = D1D(i,j4)
+    s_D(i,j4+4) = D1D(i,j4+4)
+
+    ! load the register block; volume flux products
+    do jh = 0, 1
+      do k = 1, 8
+        n = i + (j4+4*jh-1)*8 + (k-1)*64
+        qn = q_(nbase+n)
+        fx(k,jh+1) = qn * u_(nbase+n)
+        fy(k,jh+1) = qn * v_(nbase+n)
+        fz(k,jh+1) = qn * w_(nbase+n)
+      end do
+    end do
+
+    ! element boundary flux, 12 face nodes per lane
+    do fp = t, 384, 32
+      iM = VMapM(fp,ke)
+      iP = VMapP(fp,ke)
+
+      qM = q_(iM)
+      qP = q_(iP)
+
+      VelM = u_(iM)*normal_fn(fp,ke,1) &
+           + v_(iM)*normal_fn(fp,ke,2) &
+           + w_(iM)*normal_fn(fp,ke,3)
+      VelP = u_(iP)*normal_fn(fp,ke,1) &
+           + v_(iP)*normal_fn(fp,ke,2) &
+           + w_(iP)*normal_fn(fp,ke,3)
+
+      alpha = 0.5_RP * abs( VelP + VelM )
+
+      f = (fp-1)/64 + 1
+      r = mod(fp-1,64)
+      a = mod(r,8) + 1
+      b = r/8 + 1
+      s_fe(a,b,f) = 0.5_RP * Fscale(fp,ke) * ( &
+           qP * VelP - qM * VelM - alpha * ( qP - qM ) )
+    end do
+    call syncthreads()   ! one warp: s_D and s_fe visible
+
+    ! fused contraction + lift + combine; x/y via warp shuffles, z in
+    ! registers. All lanes execute every shuffle (uniform control flow).
+    do jh = 0, 1
+      j = j4 + 4*jh
+      do k = 1, 8
+
+        dx = 0.0_RP
+        do l = 1, 8
+          v = __shfl(fx(k,jh+1), l + 8*(j4-1))
+          dx = dx + s_D(i,l) * v
+        end do
+
+        dy = 0.0_RP
+        do lh = 0, 1
+          do l4 = 1, 4
+            v = __shfl(fy(k,lh+1), i + 8*(l4-1))
+            dy = dy + s_D(j, l4+4*lh) * v
+          end do
+        end do
+
+        dz = 0.0_RP
+        do l = 1, 8
+          dz = dz + s_D(k,l) * fz(l,jh+1)
+        end do
+
+        lift = Lift_mat(i,j,k,1)*s_fe(i,k,1) &
+             + Lift_mat(i,j,k,2)*s_fe(j,k,2) &
+             + Lift_mat(i,j,k,3)*s_fe(i,k,3) &
+             + Lift_mat(i,j,k,4)*s_fe(j,k,4) &
+             + Lift_mat(i,j,k,5)*s_fe(i,j,5) &
+             + Lift_mat(i,j,k,6)*s_fe(i,j,6)
+
+        n = i + (j-1)*8 + (k-1)*64
+        dqdt(nbase+n) = -( Escale(n,ke,1)*dx &
+                         + Escale(n,ke,2)*dy &
+                         + Escale(n,ke,3)*dz + lift )
+      end do
+    end do
+    return
+  end subroutine cal_tend_p7_warp_kernel
 
 end module mod_advect3d_eq_cuf
 #else
