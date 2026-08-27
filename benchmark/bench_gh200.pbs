@@ -52,7 +52,7 @@ fi
 echo "build OK"
 
 BIN=./scale-dg_extraction
-VARIANTS="SPLIT FUSED CUF CUF_TC DMMA CUF_DSM CUF_COL CUF_WARP"
+VARIANTS="SPLIT FUSED CUF CUF_TC DMMA CUF_DSM CUF_COL CUF_WARP LAYERED LAYER_TC"
 
 gen_conf () {  # gen_conf <file> <Ne> <dt> <nstep> <interval> <variant>
   cat > "$1" <<EOF
@@ -102,7 +102,11 @@ done
 #- Benchmark matrix: sizes x variants, 100 steps -------------------------------
 # dt scaled with resolution for CFL; performance is dt-independent.
 echo "=== benchmark (p=7, nstep=100) ==="
-SIZES="8 16 32 64"
+# 8^3-32^3 covers the practically relevant per-GPU range (throughput
+# saturates by 32^3; real MPI runs strong-scale toward the small end).
+# Append 64 to also probe cache-capacity effects (far-neighbor gathers
+# stop fitting L2 between 32^3 and 64^3).
+SIZES="8 16 32"
 dt_for () { case $1 in 8|16) echo 5.0D-4;; 32) echo 2.0D-4;; 64) echo 1.0D-4;; esac; }
 
 SUMMARY="$RESULT_DIR/summary.tsv"

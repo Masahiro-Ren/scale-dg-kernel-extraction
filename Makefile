@@ -21,7 +21,7 @@ OBJS   = mod_common.o         \
 
 # CUDA C++ kernels (inline-PTX DMMA) are only built/linked for CUDA builds
 ifneq (,$(findstring -cuda,$(FFLAGS)))
-OBJS   += cal_tend_dmma_p7.o
+OBJS   += cal_tend_dmma_p7.o cal_eop_p7.o
 LDLIBS += -lstdc++
 endif
 

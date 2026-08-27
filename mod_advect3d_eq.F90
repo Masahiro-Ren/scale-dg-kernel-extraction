@@ -20,6 +20,8 @@ module mod_advect3d_eq
   type(Timer) :: timer_dqdt
   type(Timer) :: timer_fused
   type(Timer) :: timer_cuf
+  type(Timer) :: timer_vflux  !< LAYERED: volume-flux (physics) kernel
+  type(Timer) :: timer_eop    !< LAYERED: element-operations CUDA kernel
 
   !> Tendency kernel type: separate flux / volume+lift kernels (original)
   integer, parameter :: TEND_KERNEL_TYPEID_SPLIT = 1
@@ -41,15 +43,47 @@ module mod_advect3d_eq
   integer, parameter :: TEND_KERNEL_TYPEID_CUF_COL = 7
   !> One warp per element: shuffle-based x/y contractions, register z
   integer, parameter :: TEND_KERNEL_TYPEID_CUF_WARP = 8
+  !> LAYERED structure (per the SCALE-DG developer's proposed split):
+  !! boundary flux = OpenACC kernel, volume flux (physics) = OpenACC
+  !! kernel writing global flux arrays, element operations
+  !! (contraction + lift + combine) = batched CUDA kernel behind the
+  !! library-style interface. LAYER_TC runs the contractions on FP64
+  !! tensor cores (DMMA).
+  integer, parameter :: TEND_KERNEL_TYPEID_LAYERED  = 9
+  integer, parameter :: TEND_KERNEL_TYPEID_LAYER_TC = 10
 
   integer :: mesh_NeX, mesh_NeY, mesh_NeZ  !< mesh dims (for cluster launch)
 
   integer :: tend_kernel_typeid = TEND_KERNEL_TYPEID_SPLIT
 
-  ! Work array for the element boundary flux (SPLIT kernel type only).
+  ! Work array for the element boundary flux (SPLIT and LAYERED types).
   ! Allocated on the heap (not as an automatic array) so that large meshes
   ! do not overflow the stack, and kept resident on the device.
   real(RP), allocatable :: ebnd_flux(:,:)
+
+  ! Volume-flux arrays crossing the LAYERED physics/element-operations
+  ! interface (the price of the layering: a global-memory round trip).
+  real(RP), allocatable :: vflux_x(:,:), vflux_y(:,:), vflux_z(:,:)
+  logical :: eop_use_tc = .false.  !< LAYER_TC: tensor-core contraction
+
+  ! The volume-derivative + lift implementation is swappable behind one
+  ! call site (SPLIT structure stays unchanged): cal_dqdt (original
+  ! OpenACC) or cal_dqdt_cuda (LAYERED: physics kernel + CUDA element
+  ! operations). Selected once at setup - no branch in the time loop.
+  abstract interface
+    subroutine dqdt_kernel_iface( dqdt, q, u, v, w, flux_bnd, &
+      D1D, D1D_tr, Lift_mat, Escale, Nq, Np, NfpTot, Ne, NeA )
+      import RP
+      integer, intent(in) :: Nq, Np, NfpTot, Ne, NeA
+      real(RP), intent(out) :: dqdt(Np,NeA)
+      real(RP), intent(in) :: q(Np,NeA), u(Np,NeA), v(Np,NeA), w(Np,NeA)
+      real(RP), intent(in) :: flux_bnd(NfpTot,Ne)
+      real(RP), intent(in) :: D1D(Nq,Nq), D1D_tr(Nq,Nq)
+      real(RP), intent(in) :: Lift_mat(Nq,Nq,Nq,6)
+      real(RP), intent(in) :: Escale(Np,Ne,3)
+    end subroutine dqdt_kernel_iface
+  end interface
+  procedure(dqdt_kernel_iface), pointer :: cal_dqdt_ptr => null()
 contains
   !> Setup
 !OCL SERIAL
@@ -59,6 +93,7 @@ contains
     integer, intent(in) :: NeX, NeY, NeZ
     !------------------------------------------------------------------------------
     mesh_NeX = NeX; mesh_NeY = NeY; mesh_NeZ = NeZ
+    cal_dqdt_ptr => cal_dqdt
     select case( trim(tend_kernel_type) )
     case ("SPLIT")
       tend_kernel_typeid = TEND_KERNEL_TYPEID_SPLIT
@@ -76,6 +111,19 @@ contains
       tend_kernel_typeid = TEND_KERNEL_TYPEID_CUF_COL
     case ("CUF_WARP")
       tend_kernel_typeid = TEND_KERNEL_TYPEID_CUF_WARP
+    case ("LAYERED", "LAYER_TC")
+#ifdef _CUDA
+      if ( trim(tend_kernel_type) == "LAYER_TC" ) then
+        tend_kernel_typeid = TEND_KERNEL_TYPEID_LAYER_TC
+        eop_use_tc = .true.
+      else
+        tend_kernel_typeid = TEND_KERNEL_TYPEID_LAYERED
+      end if
+      cal_dqdt_ptr => cal_dqdt_cuda
+#else
+      write(*,*) "TendencyKernel_Type LAYERED/LAYER_TC requires a CUDA build (nvfortran -cuda)"
+      error stop
+#endif
     case default
       write(*,*) "Unsupported tend_kernel_type: ", tend_kernel_type
     end select
@@ -86,7 +134,8 @@ contains
   subroutine setup_advect3d_eq_finalize()
     implicit none
     !------------------------------------------------------------------------------
-    if ( tend_kernel_typeid >= TEND_KERNEL_TYPEID_CUF ) then
+    if ( tend_kernel_typeid >= TEND_KERNEL_TYPEID_CUF .and. &
+         tend_kernel_typeid <= TEND_KERNEL_TYPEID_CUF_WARP ) then
       write(*,'(A30,ES24.5)') "CUF fused tendency:", Timer_elapsed(timer_cuf)
     else if ( tend_kernel_typeid == TEND_KERNEL_TYPEID_FUSED ) then
       ! Both phases run in one kernel; only the combined time is
@@ -95,6 +144,10 @@ contains
     else
       write(*,'(A30,ES24.5)') "Element boundary flux:", Timer_elapsed(timer_ebnd_flux)
       write(*,'(A30,ES24.5)') "Volume derivate + surface lift:", Timer_elapsed(timer_dqdt)
+      if ( tend_kernel_typeid >= TEND_KERNEL_TYPEID_LAYERED ) then
+        write(*,'(A30,ES24.5)') "  Volume flux (physics):", Timer_elapsed(timer_vflux)
+        write(*,'(A30,ES24.5)') "  Element ops (CUDA):", Timer_elapsed(timer_eop)
+      end if
     end if
     return
   end subroutine setup_advect3d_eq_finalize
@@ -140,7 +193,8 @@ contains
     real(RP) :: LiftBndFlux(Np)
     !------------------------------------------------------------
 
-    if ( tend_kernel_typeid >= TEND_KERNEL_TYPEID_CUF ) then
+    if ( tend_kernel_typeid >= TEND_KERNEL_TYPEID_CUF .and. &
+         tend_kernel_typeid <= TEND_KERNEL_TYPEID_CUF_WARP ) then
 
 #ifdef _CUDA
       call Timer_start(timer_cuf)
@@ -194,7 +248,7 @@ contains
       call Timer_stop(timer_ebnd_flux)
 
       call Timer_start(timer_dqdt)
-      call cal_dqdt( dqdt,               & ! (out)
+      call cal_dqdt_ptr( dqdt,           & ! (out)
          q, u, v, w,  ebnd_flux,         & ! (in)
          D1D, D1D_tr, Lift_mat,          & ! (in)
          Escale, Nq, Np, NfpTot, Ne, NeA ) ! (in)
@@ -204,6 +258,78 @@ contains
 
      return
   end subroutine advect3d_eq_cal_tend
+
+#ifdef _CUDA
+  !> LAYERED implementation of the volume derivative + surface lifting:
+  !! same interface and role as cal_dqdt, but internally split into the
+  !! per-equation physics (volume flux, OpenACC) and the batched
+  !! equation-independent element operations (CUDA), joined by global
+  !! flux arrays - the structure proposed by the SCALE-DG developer.
+!OCL SERIAL
+  subroutine cal_dqdt_cuda( dqdt,  & ! (out)
+    q, u, v, w, flux_bnd,          & ! (in)
+    D1D, D1D_tr, Lift_mat, Escale, & ! (in)
+    Nq, Np, NfpTot, Ne, NeA        ) ! (in)
+
+    use mod_advect3d_eq_cuf, only: advect3d_eq_eop_cuda
+    implicit none
+    integer, intent(in) :: Nq, Np, NfpTot, Ne, NeA
+    real(RP), intent(out) :: dqdt(Np,NeA)
+    real(RP), intent(in) :: q(Np,NeA), u(Np,NeA), v(Np,NeA), w(Np,NeA)
+    real(RP), intent(in) :: flux_bnd(NfpTot,Ne)
+    real(RP), intent(in) :: D1D(Nq,Nq), D1D_tr(Nq,Nq)
+    real(RP), intent(in) :: Lift_mat(Nq,Nq,Nq,6)
+    real(RP), intent(in) :: Escale(Np,Ne,3)
+    !------------------------------------------------------------
+
+    if ( .not. allocated(vflux_x) ) then
+      allocate( vflux_x(Np,Ne), vflux_y(Np,Ne), vflux_z(Np,Ne) )
+      !$acc enter data create(vflux_x, vflux_y, vflux_z)
+    end if
+
+    call Timer_start(timer_vflux)
+    call cal_volflux( vflux_x, vflux_y, vflux_z, & ! (out)
+       q, u, v, w, Np, Ne, NeA )                   ! (in)
+    call Timer_stop(timer_vflux)
+
+    call Timer_start(timer_eop)
+    call advect3d_eq_eop_cuda( dqdt,       & ! (inout)
+      vflux_x, vflux_y, vflux_z, flux_bnd, & ! (in)
+      D1D, Lift_mat, Escale,               & ! (in)
+      Nq, Np, NfpTot, Ne, NeA, eop_use_tc )
+    call Timer_stop(timer_eop)
+    return
+  end subroutine cal_dqdt_cuda
+#endif
+
+  !> Compute the volume flux components as global arrays (LAYERED
+  !! structure). In the full model this kernel is the per-equation
+  !! physics; here it is the advective flux q*(u,v,w).
+!OCL SERIAL
+  subroutine cal_volflux( fx, fy, fz, & ! (out)
+    q, u, v, w, Np, Ne, NeA )           ! (in)
+    implicit none
+    integer, intent(in) :: Np, Ne, NeA
+    real(RP), intent(out) :: fx(Np,Ne), fy(Np,Ne), fz(Np,Ne)
+    real(RP), intent(in) :: q(Np,NeA)
+    real(RP), intent(in) :: u(Np,NeA)
+    real(RP), intent(in) :: v(Np,NeA)
+    real(RP), intent(in) :: w(Np,NeA)
+
+    integer :: ke, n
+    !------------------------------------------
+
+    !$omp parallel do private(n)
+    !$acc parallel loop collapse(2) gang vector default(present)
+    do ke = 1, Ne
+      do n = 1, Np
+        fx(n,ke) = q(n,ke) * u(n,ke)
+        fy(n,ke) = q(n,ke) * v(n,ke)
+        fz(n,ke) = q(n,ke) * w(n,ke)
+      end do
+    end do
+    return
+  end subroutine cal_volflux
 
   !> Calculate the element boundary flux
 !OCL SERIAL

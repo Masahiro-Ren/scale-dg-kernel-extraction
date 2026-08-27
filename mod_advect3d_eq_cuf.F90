@@ -25,8 +25,23 @@ module mod_advect3d_eq_cuf
   private
 
   public :: advect3d_eq_cal_tend_cuf
+  public :: advect3d_eq_eop_cuda
 
   integer, parameter :: NTHREADS = 128
+
+  ! CUDA C++ launcher for the batched element operations (cal_eop_p7.cu):
+  ! contraction + lift + combine consuming precomputed flux arrays
+  ! (the CUDA backend of the LAYERED tendency structure).
+  interface
+    integer(c_int) function cal_eop_p7_launch( dqdt, fx, fy, fz, ebnd, &
+        D1D, Lift, escale, Ne, NeA, use_tc )                           &
+        bind(c, name="cal_eop_p7_launch")
+      use iso_c_binding, only: c_int, c_double
+      real(c_double), device :: dqdt(*), fx(*), fy(*), fz(*), ebnd(*)
+      real(c_double), device :: D1D(*), Lift(*), escale(*)
+      integer(c_int), value :: Ne, NeA, use_tc
+    end function cal_eop_p7_launch
+  end interface
 
   ! CUDA C++ launcher for the inline-PTX DMMA kernel (cal_tend_dmma_p7.cu),
   ! following Tu et al. (IEEE 2026): direct PTX m8n8k4 DMMA, cyclic index
@@ -135,6 +150,53 @@ contains
     end if
     return
   end subroutine advect3d_eq_cal_tend_cuf
+
+  !> Batched element operations (LAYERED structure): volume-flux
+  !! divergence + lift + combine on precomputed flux arrays, via the
+  !! warp-collective contraction library in cal_eop_p7.cu.
+  !! use_tc selects the FP64 tensor-core (DMMA) contraction flavor.
+  subroutine advect3d_eq_eop_cuda( dqdt, & ! (inout)
+    flux_x, flux_y, flux_z, ebnd_flux,   & ! (in)
+    D1D, Lift_mat, Escale,               & ! (in)
+    Nq, Np, NfpTot, Ne, NeA, use_tc )      ! (in)
+    use iso_c_binding, only: c_int
+    implicit none
+    integer, intent(in) :: Nq, Np, NfpTot, Ne, NeA
+    real(RP), intent(inout) :: dqdt(Np,NeA)
+    real(RP), intent(in) :: flux_x(Np,Ne), flux_y(Np,Ne), flux_z(Np,Ne)
+    real(RP), intent(in) :: ebnd_flux(NfpTot,Ne)
+    real(RP), intent(in) :: D1D(Nq,Nq)
+    real(RP), intent(in) :: Lift_mat(Nq,Nq,Nq,6)
+    real(RP), intent(in) :: Escale(Np,Ne,3)
+    logical, intent(in) :: use_tc
+
+    integer :: istat, itc
+    !------------------------------------------------------------
+
+    if ( Nq /= 8 ) then
+      write(*,*) "CUDA element operations are implemented for PolyOrder = 7 only"
+      error stop
+    end if
+    itc = 0
+    if ( use_tc ) itc = 1
+
+    !$acc host_data use_device(dqdt, flux_x, flux_y, flux_z, ebnd_flux, &
+    !$acc                      D1D, Lift_mat, Escale)
+    istat = cal_eop_p7_launch( dqdt, flux_x, flux_y, flux_z, ebnd_flux, &
+      D1D, Lift_mat, Escale, Ne, NeA, itc )
+    !$acc end host_data
+    if ( istat /= 0 ) then
+      write(*,*) "element-operations kernel launch failed, code ", istat
+      error stop
+    end if
+
+    istat = cudaDeviceSynchronize()
+    if ( istat /= 0 ) then
+      write(*,*) "element-operations kernel failed: ", cudaGetErrorString(istat)
+      error stop
+    end if
+    return
+  end subroutine advect3d_eq_eop_cuda
 
   !> Fused tendency kernel for p=7, FP64 FMA contractions.
   !  Block = one element, 128 threads (4 nodes/thread).
